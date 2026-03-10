@@ -14,44 +14,80 @@ const VIDEO_HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36'
 };
 
-async function getLowestQualityUrl(masterM3u8Url) {
-    const res = await axios.get(masterM3u8Url, { headers: VIDEO_HEADERS, responseType: 'text' });
-    const lines = res.data.split('\n');
-    const baseUrl = masterM3u8Url.replace(/\/[^/]+\.m3u8.*$/, '/');
+const FFMPEG_HEADERS = 'Referer: https://m.mydramawave.com/\r\nOrigin: https://m.mydramawave.com\r\nUser-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36\r\n';
 
-    const streams = [];
+async function parseMasterM3u8(masterUrl) {
+    const res = await axios.get(masterUrl, { headers: VIDEO_HEADERS, responseType: 'text' });
+    const lines = res.data.split('\n');
+    const baseUrl = masterUrl.replace(/\/[^/]+\.m3u8.*$/, '/');
+
+    let audioRelUrl = null;
+    const videoStreams = [];
+
     for (let i = 0; i < lines.length; i++) {
         const line = lines[i].trim();
+
+        if (line.startsWith('#EXT-X-MEDIA') && line.includes('TYPE=AUDIO')) {
+            const uriMatch = line.match(/URI="([^"]+)"/);
+            if (uriMatch) audioRelUrl = uriMatch[1];
+        }
+
         if (line.startsWith('#EXT-X-STREAM-INF')) {
             const bwMatch = line.match(/BANDWIDTH=(\d+)/);
             const urlLine = lines[i + 1]?.trim();
             if (urlLine && !urlLine.startsWith('#')) {
-                const absUrl = urlLine.startsWith('http') ? urlLine : baseUrl + urlLine;
-                streams.push({ bandwidth: parseInt(bwMatch?.[1] || '0'), url: absUrl });
+                videoStreams.push({
+                    bandwidth: parseInt(bwMatch?.[1] || '0'),
+                    url: urlLine.startsWith('http') ? urlLine : baseUrl + urlLine
+                });
             }
         }
     }
 
-    if (streams.length === 0) return masterM3u8Url;
-    streams.sort((a, b) => a.bandwidth - b.bandwidth);
-    return streams[0].url;
+    videoStreams.sort((a, b) => a.bandwidth - b.bandwidth);
+    const lowestVideoUrl = videoStreams[0]?.url || masterUrl;
+    const audioUrl = audioRelUrl ? (audioRelUrl.startsWith('http') ? audioRelUrl : baseUrl + audioRelUrl) : null;
+
+    return { lowestVideoUrl, audioUrl };
 }
 
 async function downloadEpisodeToFile(masterM3u8Url) {
-    const subM3u8Url = await getLowestQualityUrl(masterM3u8Url);
+    const { lowestVideoUrl, audioUrl } = await parseMasterM3u8(masterM3u8Url);
     const tmpFile = path.join(os.tmpdir(), `freereels_${Date.now()}.mp4`);
 
-    const ffmpegHeaders = `Referer: https://m.mydramawave.com/\r\nOrigin: https://m.mydramawave.com\r\nUser-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36\r\n`;
+    console.log('[video] Video URL:', lowestVideoUrl);
+    console.log('[video] Audio URL:', audioUrl);
 
-    await execFileAsync('ffmpeg', [
-        '-y',
-        '-headers', ffmpegHeaders,
-        '-allowed_extensions', 'ALL',
-        '-i', subM3u8Url,
-        '-c', 'copy',
-        '-movflags', '+faststart',
-        tmpFile
-    ], { timeout: 120_000 });
+    let ffmpegArgs;
+
+    if (audioUrl) {
+        ffmpegArgs = [
+            '-y',
+            '-allowed_extensions', 'ALL',
+            '-headers', FFMPEG_HEADERS,
+            '-i', lowestVideoUrl,
+            '-allowed_extensions', 'ALL',
+            '-headers', FFMPEG_HEADERS,
+            '-i', audioUrl,
+            '-map', '0:v:0',
+            '-map', '1:a:0',
+            '-c', 'copy',
+            '-movflags', '+faststart',
+            tmpFile
+        ];
+    } else {
+        ffmpegArgs = [
+            '-y',
+            '-allowed_extensions', 'ALL',
+            '-headers', FFMPEG_HEADERS,
+            '-i', lowestVideoUrl,
+            '-c', 'copy',
+            '-movflags', '+faststart',
+            tmpFile
+        ];
+    }
+
+    await execFileAsync('ffmpeg', ffmpegArgs, { timeout: 120_000 });
 
     const stat = fs.statSync(tmpFile);
     if (stat.size > MAX_SIZE_BYTES) {

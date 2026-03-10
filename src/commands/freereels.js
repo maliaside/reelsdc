@@ -270,10 +270,43 @@ module.exports = {
 
             } else if (sub === 'cari') {
                 const judul = interaction.options.getString('judul').toLowerCase();
-                await interaction.editReply({ content: `🔍 Mencari **"${judul}"**...` });
+                await interaction.editReply({ content: `🔍 Mencari **"${judul}"** dari seluruh konten...` });
 
-                const data = await api.getForYou(0);
-                items = extractItems(data).filter(i =>
+                const seen = new Set();
+                const allItems = [];
+
+                // Fetch homepage and animepage
+                const [homepageData, animeData] = await Promise.all([
+                    api.getHomepage().catch(() => null),
+                    api.getAnimePage().catch(() => null)
+                ]);
+                for (const d of [homepageData, animeData]) {
+                    for (const i of extractItems(d || {})) {
+                        if (!seen.has(i.key)) { seen.add(i.key); allItems.push(i); }
+                    }
+                }
+
+                // Fetch multiple foryou offsets sequentially to avoid rate limit
+                for (const offset of [0, 20, 40, 60, 80, 100, 120, 140, 160]) {
+                    try {
+                        const d = await api.getForYou(offset);
+                        const pageItems = extractItems(d);
+                        if (pageItems.length === 0) break;
+                        for (const i of pageItems) {
+                            if (!seen.has(i.key)) { seen.add(i.key); allItems.push(i); }
+                        }
+                        // Early exit if found
+                        const earlyFound = allItems.filter(i =>
+                            (i.title || i.name || '').toLowerCase().includes(judul)
+                        );
+                        if (earlyFound.length >= 3) break;
+                    } catch (e) {
+                        console.warn('[cari] offset', offset, e.message);
+                        await new Promise(r => setTimeout(r, 1000));
+                    }
+                }
+
+                items = allItems.filter(i =>
                     (i.title || i.name || '').toLowerCase().includes(judul) ||
                     (i.desc || '').toLowerCase().includes(judul) ||
                     (i.content_tags || []).some(t => t.toLowerCase().includes(judul))
@@ -282,7 +315,7 @@ module.exports = {
 
                 if (items.length === 0) {
                     return interaction.editReply({
-                        content: `❌ Drama **"${judul}"** tidak ditemukan dalam daftar terkini.\n\nCoba browse langsung:\n• \`/freereels foryou\`\n• \`/freereels homepage\`\n• \`/freereels anime\``
+                        content: `❌ Drama **"${judul}"** tidak ditemukan (dicari dari ${allItems.length} drama).\n\nCoba browse manual:\n• \`/freereels foryou\`\n• \`/freereels homepage\`\n• \`/freereels anime\``
                     });
                 }
 
