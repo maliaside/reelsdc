@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>FreeReels Player</title>
+<title>Drama Player</title>
 <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -17,9 +17,9 @@
 </head>
 <body>
 <div class="container">
-  <h2 id="title">🎬 FreeReels Player</h2>
+  <h2 id="title">🎬 Drama Player</h2>
   <video id="video" controls autoplay playsinline></video>
-  <div class="badge">FreeReels · Dubbing Indonesia</div>
+  <div class="badge" id="badge">Loading...</div>
   <div class="error" id="error"></div>
 </div>
 <script>
@@ -27,23 +27,50 @@
   const src = params.get('url');
   const title = params.get('title');
   const ep = params.get('ep');
+  const platform = params.get('platform') || '';
 
-  if (title) document.getElementById('title').textContent = (ep ? 'Episode ' + ep + ' - ' : '') + decodeURIComponent(title);
+  if (title) {
+    const decoded = decodeURIComponent(title);
+    document.getElementById('title').textContent = (ep ? 'Episode ' + ep + ' - ' : '') + decoded;
+    document.title = decoded;
+  }
 
+  const badge = document.getElementById('badge');
   const video = document.getElementById('video');
+  const errEl = document.getElementById('error');
+
+  function setError(msg) { errEl.textContent = msg; badge.textContent = ''; }
+
   if (!src) {
-    document.getElementById('error').textContent = 'URL video tidak ditemukan.';
-  } else if (Hls.isSupported()) {
-    const hls = new Hls({ maxBufferLength: 30, maxMaxBufferLength: 60 });
-    hls.loadSource(decodeURIComponent(src));
-    hls.attachMedia(video);
-    hls.on(Hls.Events.ERROR, (e, data) => {
-      if (data.fatal) document.getElementById('error').textContent = 'Gagal memuat video: ' + data.type;
-    });
-  } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-    video.src = decodeURIComponent(src);
+    setError('URL video tidak ditemukan.');
   } else {
-    document.getElementById('error').textContent = 'Browser tidak mendukung HLS. Gunakan Chrome atau Safari.';
+    const resolvedSrc = decodeURIComponent(src);
+    const isHLS = resolvedSrc.includes('.m3u8') || resolvedSrc.includes('/proxy/m3u8') || resolvedSrc.includes('/proxy/direct');
+
+    if (isHLS) {
+      badge.textContent = (platform === 'melolo' ? 'Melolo' : platform === 'reelshort' ? 'ReelShort' : 'FreeReels') + ' · Streaming HLS';
+      if (Hls.isSupported()) {
+        const hls = new Hls({ maxBufferLength: 30, maxMaxBufferLength: 60 });
+        hls.loadSource(resolvedSrc);
+        hls.attachMedia(video);
+        hls.on(Hls.Events.MANIFEST_PARSED, () => { badge.textContent = badge.textContent; });
+        hls.on(Hls.Events.ERROR, (e, data) => {
+          if (data.fatal) setError('Gagal memuat video HLS: ' + data.type + ' - ' + (data.details || ''));
+        });
+      } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+        video.src = resolvedSrc;
+        badge.textContent = 'Native HLS';
+      } else {
+        setError('Browser tidak mendukung HLS. Gunakan Chrome atau Safari.');
+      }
+    } else {
+      // Direct MP4
+      badge.textContent = (platform === 'melolo' ? 'Melolo' : 'Video') + ' · MP4 Streaming';
+      video.src = resolvedSrc;
+      video.addEventListener('error', () => {
+        setError('Gagal memuat video MP4. Coba refresh halaman.');
+      });
+    }
   }
 </script>
 </body>

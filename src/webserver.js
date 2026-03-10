@@ -152,8 +152,14 @@ function getPlayerUrl(m3u8url, title, ep) {
 function getDirectPlayerUrl(m3u8url, title, ep) {
     const base = getBaseUrl();
     const proxiedM3u8 = `${base}/proxy/direct?url=${encodeURIComponent(m3u8url)}`;
-    const params = new URLSearchParams({ url: proxiedM3u8, title: title || '', ep: String(ep || '') });
+    const params = new URLSearchParams({ url: proxiedM3u8, title: title || '', ep: String(ep || ''), platform: 'reelshort' });
     return `${base}/player?${params.toString()}`;
 }
 
-module.exports = { startWebServer, getPlayerUrl, getDirectPlayerUrl };
+function getMeloloPlayerUrl(mp4url, title, ep) {
+    const base = getBaseUrl();
+    const params = new URLSearchParams({ url: mp4url, title: title || '', ep: String(ep || ''), platform: 'melolo' });
+    return `${base}/player?${params.toString()}`;
+}
+
+module.exports = { startWebServer, getPlayerUrl, getDirectPlayerUrl, getMeloloPlayerUrl };
