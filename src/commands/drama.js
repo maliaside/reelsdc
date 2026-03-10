@@ -495,11 +495,12 @@ module.exports = {
         try {
             if (sub === 'cari') {
                 const judul = interaction.options.getString('judul');
-                await interaction.editReply({ content: `🔍 Mencari **"${judul}"** di FreeReels + ReelShort...` });
+                await interaction.editReply({ content: `🔍 Mencari **"${judul}"** di FreeReels + ReelShort + Melolo...` });
 
                 const allItems = [];
                 const seen = new Set();
 
+                // ReelShort — real search API
                 try {
                     const rsData = await rsApi.search(judul, 1);
                     for (const item of rsExtract(rsData)) {
@@ -507,6 +508,15 @@ module.exports = {
                     }
                 } catch (e) { console.warn('[drama/cari] RS:', e.message); }
 
+                // Melolo — real search API
+                try {
+                    const mlData = await mlApi.search(judul);
+                    for (const item of mlApi.parseSearchItems(mlData)) {
+                        if (!seen.has(item.key)) { seen.add(item.key); allItems.push(item); }
+                    }
+                } catch (e) { console.warn('[drama/cari] ML:', e.message); }
+
+                // FreeReels — filter from browse results
                 try {
                     const [homeData, animeData] = await Promise.all([
                         frApi.getHomepage().catch(() => null),
@@ -528,18 +538,21 @@ module.exports = {
                 } catch (e) { console.warn('[drama/cari] FR:', e.message); }
 
                 const kw = judul.toLowerCase();
+                // RS and Melolo results are already search-matched; FR needs keyword filter
                 const matched = allItems.filter(i => {
+                    if (i._source === 'reelshort' || i._source === 'melolo') return true;
                     const t = [i.title, i.desc, ...(Array.isArray(i.tags) ? i.tags.map(t => typeof t === 'string' ? t : t?.name || '') : [])].filter(Boolean).join(' ').toLowerCase();
                     return t.includes(kw);
                 });
 
                 if (matched.length === 0) {
-                    return interaction.editReply({ content: `❌ **"${judul}"** tidak ditemukan di ${allItems.length} drama yang tersedia.` });
+                    return interaction.editReply({ content: `❌ **"${judul}"** tidak ditemukan.` });
                 }
 
                 const rsFound = matched.filter(i => i._source === 'reelshort').length;
                 const frFound = matched.filter(i => i._source === 'freereels').length;
-                await interaction.editReply({ content: `✅ **${matched.length} drama** ditemukan (${rsFound} ReelShort, ${frFound} FreeReels)` });
+                const mlFound = matched.filter(i => i._source === 'melolo').length;
+                await interaction.editReply({ content: `✅ **${matched.length} drama** ditemukan (${rsFound} ReelShort, ${mlFound} Melolo, ${frFound} FreeReels)` });
                 await showList(interaction, matched, `Cari: "${judul}"`, userId);
 
             } else if (sub === 'foryou') {

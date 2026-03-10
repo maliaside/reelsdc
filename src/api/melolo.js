@@ -12,15 +12,18 @@ async function getDetail(bookId) {
     return res.data;
 }
 
+async function search(query) {
+    const res = await axios.get(`${BASE_URL}/search`, { params: { query }, timeout: 15000 });
+    return res.data;
+}
+
 async function getStream(videoId) {
     const res = await axios.get(`${BASE_URL}/stream`, { params: { videoId }, timeout: 15000 });
     return res.data;
 }
 
-function parseForYouItems(raw) {
-    const cellData = raw?.data?.cell?.cell_data || [];
-    const books = cellData.flatMap(c => c.books || []);
-    return books.map(b => ({
+function _normalizeBook(b) {
+    return {
         _source: 'melolo',
         key: String(b.book_id || ''),
         title: b.book_name || '',
@@ -28,7 +31,29 @@ function parseForYouItems(raw) {
         desc: b.abstract || b.sub_abstract || '',
         tags: [],
         episodes: b.serial_count || b.last_chapter_index || null
-    })).filter(b => b.key);
+    };
+}
+
+function parseForYouItems(raw) {
+    const cellData = raw?.data?.cell?.cell_data || [];
+    const books = cellData.flatMap(c => c.books || []);
+    return books.map(_normalizeBook).filter(b => b.key);
+}
+
+function parseSearchItems(raw) {
+    const searchData = raw?.data?.search_data || {};
+    const seen = new Set();
+    const results = [];
+    for (const bucket of Object.values(searchData)) {
+        for (const b of (bucket.books || [])) {
+            const item = _normalizeBook(b);
+            if (item.key && !seen.has(item.key)) {
+                seen.add(item.key);
+                results.push(item);
+            }
+        }
+    }
+    return results;
 }
 
 function parseDetail(raw) {
@@ -76,4 +101,4 @@ function parseVideoQualities(streamData) {
     return { qualities, topUrl, duration: topDuration };
 }
 
-module.exports = { getForYou, getDetail, getStream, parseForYouItems, parseDetail, parseVideoQualities };
+module.exports = { getForYou, search, getDetail, getStream, parseForYouItems, parseSearchItems, parseDetail, parseVideoQualities };
