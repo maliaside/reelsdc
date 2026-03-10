@@ -2,6 +2,8 @@ require('dotenv').config();
 const { Client, GatewayIntentBits, Collection } = require('discord.js');
 const { startWebServer } = require('./src/webserver');
 const freereelsCmd = require('./src/commands/freereels');
+const reelshortCmd = require('./src/commands/reelshort');
+const cariCmd = require('./src/commands/cari');
 
 process.on('unhandledRejection', (reason) => {
     console.error('[UnhandledRejection]', reason?.message || reason);
@@ -17,6 +19,12 @@ const client = new Client({
 client.commands = new Collection();
 for (const cmd of freereelsCmd.data) {
     client.commands.set(cmd.name, freereelsCmd);
+}
+for (const cmd of reelshortCmd.data) {
+    client.commands.set(cmd.name, reelshortCmd);
+}
+for (const cmd of cariCmd.data) {
+    client.commands.set(cmd.name, cariCmd);
 }
 
 client.once('clientReady', () => {

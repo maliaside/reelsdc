@@ -9,15 +9,13 @@ const {
     AttachmentBuilder
 } = require('discord.js');
 const api = require('../api/freereels');
-const { downloadEpisodeToFile, cleanup } = require('../video');
-
-const DISCORD_MAX_BYTES = 24 * 1024 * 1024;
+const { downloadFreeReelsEpisode, cleanup } = require('../video');
 
 function extractItems(data) {
     if (!data) return [];
     const inner = data.data || data;
     const items = inner.items || inner.list || inner.drama || inner.anime || inner.result || (Array.isArray(inner) ? inner : []);
-    return items.filter(i => i.key && i.key !== '');
+    return items.filter(i => i.key && i.key !== '' && i.item_type !== 'card');
 }
 
 function buildListEmbed(item, index, total, title) {
@@ -120,7 +118,7 @@ async function sendEpisodeVideo(interaction, ep, epNum, info, isFollowUp = false
 
     let filePath = null;
     try {
-        const result = await downloadEpisodeToFile(videoUrl, subtitleUrl);
+        const result = await downloadFreeReelsEpisode(videoUrl, subtitleUrl, ep.duration || null);
         filePath = result.filePath;
         const sizeMB = (result.sizeBytes / 1024 / 1024).toFixed(1);
 
