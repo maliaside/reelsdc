@@ -13,6 +13,7 @@
     --fr: #5865F2;
     --rs: #EB459E;
     --ml: #FF6B35;
+    --mb: #FFC107;
     --green: #43b581;
     --red: #ed4245;
     --text: #e0e0f0;
@@ -54,6 +55,7 @@
   .card.fr::before { background: var(--fr); }
   .card.rs::before { background: var(--rs); }
   .card.ml::before { background: var(--ml); }
+  .card.mb::before { background: var(--mb); }
   .card.err::before { background: var(--red); }
   .card .label { font-size: .72rem; color: var(--muted); text-transform: uppercase; letter-spacing: .8px; margin-bottom: 8px; }
   .card .value { font-size: 1.9rem; font-weight: 700; line-height: 1; }
@@ -113,6 +115,7 @@
     <div class="card fr"><div class="label">FreeReels</div><div class="value" id="frCount">—</div><div class="sub-val">permintaan</div></div>
     <div class="card rs"><div class="label">ReelShort</div><div class="value" id="rsCount">—</div><div class="sub-val">permintaan</div></div>
     <div class="card ml"><div class="label">Melolo</div><div class="value" id="mlCount">—</div><div class="sub-val">permintaan</div></div>
+    <div class="card mb"><div class="label">MovieBox</div><div class="value" id="mbCount">—</div><div class="sub-val">permintaan</div></div>
     <div class="card"><div class="label">Download</div><div class="value" id="dlCount">—</div><div class="sub-val" id="streamCount">0 stream</div></div>
   </div>
 
@@ -133,6 +136,11 @@
       <span class="bar-label">🎥 Melolo</span>
       <div class="bar-track"><div class="bar-fill" id="barMl" style="background:var(--ml);width:0%"></div></div>
       <span class="bar-count" id="pctMl">0%</span>
+    </div>
+    <div class="bar-row">
+      <span class="bar-label">🎬 MovieBox</span>
+      <div class="bar-track"><div class="bar-fill" id="barMb" style="background:var(--mb);width:0%"></div></div>
+      <span class="bar-count" id="pctMb">0%</span>
     </div>
   </div>
 
@@ -158,17 +166,20 @@ async function load() {
     document.getElementById('frCount').textContent = c.freereels;
     document.getElementById('rsCount').textContent = c.reelshort;
     document.getElementById('mlCount').textContent = c.melolo;
+    document.getElementById('mbCount').textContent = c.moviebox || 0;
     document.getElementById('dlCount').textContent = c.downloads;
     document.getElementById('streamCount').textContent = c.streams + ' stream';
 
-    const plat = c.freereels + c.reelshort + c.melolo || 1;
+    const plat = (c.freereels + c.reelshort + c.melolo + (c.moviebox||0)) || 1;
     const pct = v => Math.round(v / plat * 100);
     document.getElementById('barFr').style.width = pct(c.freereels) + '%';
     document.getElementById('barRs').style.width = pct(c.reelshort) + '%';
     document.getElementById('barMl').style.width = pct(c.melolo) + '%';
+    document.getElementById('barMb').style.width = pct(c.moviebox||0) + '%';
     document.getElementById('pctFr').textContent = pct(c.freereels) + '%';
     document.getElementById('pctRs').textContent = pct(c.reelshort) + '%';
     document.getElementById('pctMl').textContent = pct(c.melolo) + '%';
+    document.getElementById('pctMb').textContent = pct(c.moviebox||0) + '%';
 
     const act = d.recentActivity;
     const body = document.getElementById('actBody');

@@ -8,8 +8,9 @@ const frApi = require('../api/freereels');
 const rsApi = require('../api/reelshort');
 const mlApi = require('../api/melolo');
 const { downloadFreeReelsEpisode, downloadReelShortEpisode, downloadMeloloEpisode, cleanup } = require('../video');
-const { getPlayerUrl, getDirectPlayerUrl, getMeloloPlayerUrl } = require('../webserver');
+const { getPlayerUrl, getDirectPlayerUrl, getMeloloPlayerUrl, getMbPlayerUrl } = require('../webserver');
 const { trackCommand } = require('../stats');
+const mbApi = require('../api/moviebox');
 
 // ─── Item normalizers ─────────────────────────────────────────────────────────
 
@@ -32,11 +33,27 @@ function rsExtract(data) {
     const items = Array.isArray(d.lists) ? d.lists : Array.isArray(d.results) ? d.results : [];
     return items.filter(i => i.bookId || i.book_id).map(normalizeRs);
 }
+function mbExtract(data) {
+    return mbApi.parseItems(data).map(i => ({
+        _source: 'moviebox',
+        key: i.key,
+        title: i.title,
+        cover: i.cover,
+        desc: [
+            i.genre,
+            i.country ? `🌍 ${i.country}` : '',
+            i.imdb ? `⭐ IMDB ${i.imdb}` : '',
+            i.desc,
+        ].filter(Boolean).join(' · ').slice(0, 400),
+        tags: [],
+        episodes: null,
+    }));
+}
 
 // ─── List embed builders ──────────────────────────────────────────────────────
 
-const COLORS = { freereels: 0x5865F2, reelshort: 0xEB459E, melolo: 0xFF6B35 };
-const LABELS = { freereels: '🎭 FreeReels', reelshort: '🎬 ReelShort', melolo: '🎥 Melolo' };
+const COLORS = { freereels: 0x5865F2, reelshort: 0xEB459E, melolo: 0xFF6B35, moviebox: 0xFFC107 };
+const LABELS = { freereels: '🎭 FreeReels', reelshort: '🎬 ReelShort', melolo: '🎥 Melolo', moviebox: '🎬 MovieBox' };
 
 function buildListEmbed(item, idx, total, listTitle) {
     const tags = Array.isArray(item.tags) ? item.tags.map(t => typeof t === 'string' ? t : t?.name || '').filter(Boolean) : [];
@@ -427,6 +444,91 @@ async function showMlDetail(interaction, bookId, userId) {
     }
 }
 
+// ─── MovieBox ─────────────────────────────────────────────────────────────────
+
+async function showMbDetail(interaction, subjectId, userId) {
+    await interaction.deferReply({ flags: 64 });
+    try {
+        const detail = await mbApi.getDetail(subjectId);
+        const subject = detail?.subject;
+        if (!subject) return interaction.editReply({ content: '❌ Detail tidak ditemukan.' });
+
+        const title = subject.title || 'Unknown';
+        const cover = subject.cover?.url || subject.thumbnail;
+        const genre = subject.genre || '';
+        const country = subject.countryName || '';
+        const imdb = subject.imdbRatingValue || '';
+        const desc = subject.description || '';
+        const duration = subject.duration > 0 ? `${Math.round(subject.duration / 60)} menit` : null;
+        const stars = (detail.stars || []).slice(0, 4).map(s => s.name).filter(Boolean).join(', ');
+
+        const embed = new EmbedBuilder()
+            .setColor(COLORS.moviebox)
+            .setTitle(title.slice(0, 256))
+            .setAuthor({ name: '🎬 MovieBox' })
+            .setFooter({ text: 'MovieBox · Hanya kamu yang melihat ini' })
+            .setTimestamp();
+
+        if (cover) embed.setImage(cover);
+        if (desc) embed.setDescription(desc.slice(0, 400));
+
+        const fields = [];
+        if (genre) fields.push({ name: '🎭 Genre', value: genre, inline: true });
+        if (country) fields.push({ name: '🌍 Negara', value: country, inline: true });
+        if (imdb) fields.push({ name: '⭐ IMDB', value: imdb, inline: true });
+        if (duration) fields.push({ name: '⏱️ Durasi', value: duration, inline: true });
+        if (stars) fields.push({ name: '👥 Pemain', value: stars, inline: false });
+        if (fields.length) embed.addFields(fields);
+
+        const qRow = new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId(`mb_${userId}_${subjectId}_q360`).setLabel('📱 360p Browser').setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder().setCustomId(`mb_${userId}_${subjectId}_q480`).setLabel('📺 480p Browser').setStyle(ButtonStyle.Primary),
+            new ButtonBuilder().setCustomId(`mb_${userId}_${subjectId}_q1080`).setLabel('🖥️ 1080p Browser').setStyle(ButtonStyle.Success),
+        );
+
+        await interaction.editReply({ embeds: [embed], components: [qRow] });
+
+        const msg = await interaction.fetchReply();
+        const qcol = msg.createMessageComponentCollector({ time: 120_000 });
+        qcol.on('collect', async q => {
+            try {
+                if (q.user.id !== userId) return q.reply({ content: '⛔ Bukan giliranmu.', flags: 64 });
+                await q.deferUpdate();
+
+                const targetQ = q.customId.endsWith('_q360') ? 360 : q.customId.endsWith('_q480') ? 480 : 1080;
+                await q.editReply({ content: '⏳ Mengambil link streaming...', embeds: [], components: [] });
+
+                const srcData = await mbApi.getSources(subjectId);
+                const sources = mbApi.parseSources(srcData);
+
+                if (!sources.length) return q.editReply({ content: '❌ Tidak ada sumber video tersedia untuk film ini.' });
+
+                let chosen = sources.find(s => s.quality === targetQ);
+                if (!chosen) chosen = sources.reduce((b, s) => Math.abs(s.quality - targetQ) < Math.abs(b.quality - targetQ) ? s : b, sources[0]);
+
+                const playerUrl = getMbPlayerUrl(chosen.url, title, chosen.quality);
+                const sizeStr = chosen.sizeMB > 0 ? `${chosen.sizeMB} MB` : '';
+
+                const resEmbed = new EmbedBuilder()
+                    .setColor(COLORS.moviebox)
+                    .setTitle(`🔗 ${title.slice(0, 200)}`)
+                    .setDescription(`**[▶ Klik untuk tonton di browser](${playerUrl})**\n\nKualitas: **${chosen.quality}p**${sizeStr ? ` · ${sizeStr}` : ''}\nTonton langsung di browser tanpa download.`)
+                    .setFooter({ text: 'MovieBox · Streaming · Hanya kamu yang bisa melihat ini' });
+
+                await q.editReply({ content: null, embeds: [resEmbed], components: [] });
+                trackCommand({ platform: 'moviebox', user: q.user?.username || 'unknown', action: `Tonton ${chosen.quality}p`, title, result: 'stream' });
+            } catch (err) {
+                console.error('[mb/quality]', err.message);
+                await q.editReply({ content: `❌ Gagal: ${err.message}`, embeds: [], components: [] }).catch(() => {});
+            }
+        });
+        qcol.on('end', () => interaction.editReply({ components: [] }).catch(() => {}));
+    } catch (err) {
+        console.error('[mb/detail]', err.message);
+        interaction.editReply({ content: `❌ Gagal: ${err.message}` }).catch(() => {});
+    }
+}
+
 // ─── Public list view ─────────────────────────────────────────────────────────
 
 async function showList(interaction, items, listTitle, userId) {
@@ -448,6 +550,7 @@ async function showList(interaction, items, listTitle, userId) {
                 if (platform === 'freereels') return showFrDetail(btn, key, userId);
                 if (platform === 'reelshort') return showRsDetail(btn, key, userId);
                 if (platform === 'melolo') return showMlDetail(btn, key, userId);
+                if (platform === 'moviebox') return showMbDetail(btn, key, userId);
                 return;
             }
 
@@ -468,12 +571,12 @@ module.exports = {
     data: [
         new SlashCommandBuilder()
             .setName('drama')
-            .setDescription('Cari dan tonton drama FreeReels, ReelShort & Melolo')
+            .setDescription('Cari dan tonton drama + film dari FreeReels, ReelShort, Melolo & MovieBox')
             .addSubcommand(sub =>
                 sub.setName('cari')
-                    .setDescription('Cari drama di FreeReels + ReelShort sekaligus')
+                    .setDescription('Cari drama/film di semua platform sekaligus')
                     .addStringOption(opt =>
-                        opt.setName('judul').setDescription('Judul atau kata kunci drama').setRequired(true)))
+                        opt.setName('judul').setDescription('Judul atau kata kunci').setRequired(true)))
             .addSubcommand(sub =>
                 sub.setName('foryou')
                     .setDescription('Browse drama For You dari FreeReels')
@@ -487,6 +590,11 @@ module.exports = {
             .addSubcommand(sub =>
                 sub.setName('melolo')
                     .setDescription('Browse drama For You dari Melolo'))
+            .addSubcommand(sub =>
+                sub.setName('moviebox')
+                    .setDescription('Browse film & series trending dari MovieBox')
+                    .addIntegerOption(opt =>
+                        opt.setName('page').setDescription('Halaman (default: 0)').setMinValue(0)))
     ],
 
     async execute(interaction) {
@@ -519,6 +627,14 @@ module.exports = {
                     }
                 } catch (e) { console.warn('[drama/cari] ML:', e.message); }
 
+                // MovieBox — real search API
+                try {
+                    const mbData = await mbApi.search(judul);
+                    for (const item of mbExtract(mbData)) {
+                        if (!seen.has(item.key)) { seen.add(item.key); allItems.push(item); }
+                    }
+                } catch (e) { console.warn('[drama/cari] MB:', e.message); }
+
                 // FreeReels — filter from browse results
                 try {
                     const [homeData, animeData] = await Promise.all([
@@ -541,9 +657,9 @@ module.exports = {
                 } catch (e) { console.warn('[drama/cari] FR:', e.message); }
 
                 const kw = judul.toLowerCase();
-                // RS and Melolo results are already search-matched; FR needs keyword filter
+                // RS, Melolo, MovieBox results are search-matched; FR needs keyword filter
                 const matched = allItems.filter(i => {
-                    if (i._source === 'reelshort' || i._source === 'melolo') return true;
+                    if (i._source === 'reelshort' || i._source === 'melolo' || i._source === 'moviebox') return true;
                     const t = [i.title, i.desc, ...(Array.isArray(i.tags) ? i.tags.map(t => typeof t === 'string' ? t : t?.name || '') : [])].filter(Boolean).join(' ').toLowerCase();
                     return t.includes(kw);
                 });
@@ -588,6 +704,14 @@ module.exports = {
                 if (!items.length) return interaction.editReply({ content: '❌ Tidak ada data dari Melolo.' });
                 await showList(interaction, items, 'Melolo · For You', userId);
                 trackCommand({ platform: 'melolo', user: interaction.user.username, action: 'foryou', result: 'ok' });
+
+            } else if (sub === 'moviebox') {
+                const page = interaction.options.getInteger('page') || 0;
+                const data = await mbApi.getTrending(page);
+                const items = mbExtract(data);
+                if (!items.length) return interaction.editReply({ content: '❌ Tidak ada data dari MovieBox.' });
+                await showList(interaction, items, `MovieBox · Trending (hal. ${page})`, userId);
+                trackCommand({ platform: 'moviebox', user: interaction.user.username, action: 'trending', result: 'ok' });
             }
         } catch (err) {
             console.error('[drama]', err.message);

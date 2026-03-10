@@ -18,6 +18,11 @@ const VIDEO_HEADERS = {
 function getBaseUrl() {
     if (process.env.BOT_BASE_URL) return process.env.BOT_BASE_URL;
     if (process.env.REPLIT_DEV_DOMAIN) return `https://${process.env.REPLIT_DEV_DOMAIN}`;
+    // In production VM deployment, REPLIT_DOMAINS contains the live domain
+    if (process.env.REPLIT_DOMAINS) {
+        const domain = process.env.REPLIT_DOMAINS.split(',')[0].trim();
+        if (domain) return `https://${domain}`;
+    }
     return `http://localhost:${PORT}`;
 }
 
@@ -208,4 +213,10 @@ function getMeloloPlayerUrl(mp4url, title, ep) {
     return `${base}/player?${params.toString()}`;
 }
 
-module.exports = { startWebServer, setBotClient, getPlayerUrl, getDirectPlayerUrl, getMeloloPlayerUrl };
+function getMbPlayerUrl(mp4url, title, quality) {
+    const base = getBaseUrl();
+    const params = new URLSearchParams({ url: mp4url, title: title || '', quality: String(quality || ''), platform: 'moviebox' });
+    return `${base}/player?${params.toString()}`;
+}
+
+module.exports = { startWebServer, setBotClient, getPlayerUrl, getDirectPlayerUrl, getMeloloPlayerUrl, getMbPlayerUrl };

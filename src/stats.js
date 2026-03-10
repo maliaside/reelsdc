@@ -5,6 +5,7 @@ const counts = {
     freereels: 0,
     reelshort: 0,
     melolo: 0,
+    moviebox: 0,
     errors: 0,
     downloads: 0,
     streams: 0,

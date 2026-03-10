@@ -48,7 +48,8 @@
     const isHLS = resolvedSrc.includes('.m3u8') || resolvedSrc.includes('/proxy/m3u8') || resolvedSrc.includes('/proxy/direct');
 
     if (isHLS) {
-      badge.textContent = (platform === 'melolo' ? 'Melolo' : platform === 'reelshort' ? 'ReelShort' : 'FreeReels') + ' · Streaming HLS';
+      const platLabel = { melolo: 'Melolo', reelshort: 'ReelShort', freereels: 'FreeReels', moviebox: 'MovieBox' }[platform] || platform;
+      badge.textContent = platLabel + ' · Streaming HLS';
       if (Hls.isSupported()) {
         const hls = new Hls({ maxBufferLength: 30, maxMaxBufferLength: 60 });
         hls.loadSource(resolvedSrc);
@@ -65,7 +66,9 @@
       }
     } else {
       // Direct MP4
-      badge.textContent = (platform === 'melolo' ? 'Melolo' : 'Video') + ' · MP4 Streaming';
+      const platLabelMp4 = { melolo: 'Melolo', moviebox: 'MovieBox' }[platform] || 'Video';
+      const quality = params.get('quality');
+      badge.textContent = platLabelMp4 + (quality ? ` · ${quality}p` : '') + ' · Streaming';
       video.src = resolvedSrc;
       video.addEventListener('error', () => {
         setError('Gagal memuat video MP4. Coba refresh halaman.');

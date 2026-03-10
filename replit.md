@@ -1,6 +1,6 @@
 # NGEDRACIN Bot — Discord Bot 24/7
 
-Bot Discord 24/7 untuk menonton drama dari 3 platform: FreeReels, ReelShort, dan Melolo. Satu command `/drama` dengan subcommand. Video <8MB dikirim langsung ke Discord; lebih besar → stream link.
+Bot Discord 24/7 untuk menonton drama/film dari 4 platform: FreeReels, ReelShort, Melolo, dan MovieBox. Satu command `/drama` dengan subcommand. Video <8MB dikirim langsung ke Discord; lebih besar → browser stream link.
 
 ## Struktur Project
 
@@ -11,9 +11,10 @@ src/
     freereels.js            # Wrapper API FreeReels (foryou, search, detail)
     reelshort.js            # Wrapper API ReelShort (foryou, search, detail, episode)
     melolo.js               # Wrapper API Melolo (forYou, search, detail, stream)
+    moviebox.js             # Wrapper API MovieBox (trending, search, detail, sources)
   commands/
     drama.js                # Satu-satunya slash command: /drama
-  stats.js                  # In-memory stats tracker (uptime, counts, activity log)
+  stats.js                  # In-memory stats tracker (uptime, counts per platform, activity)
   video.js                  # Download + encode video via ffmpeg (HLS → mp4)
   webserver.js              # Express server port 5000 + 3000 (health check)
   player.html               # Web player fallback (hls.js + MP4)
