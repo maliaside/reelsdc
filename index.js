@@ -1,5 +1,6 @@
 require('dotenv').config();
 const { Client, GatewayIntentBits, Collection } = require('discord.js');
+const { startWebServer } = require('./src/webserver');
 const freereelsCmd = require('./src/commands/freereels');
 
 const client = new Client({
@@ -11,7 +12,7 @@ for (const cmd of freereelsCmd.data) {
     client.commands.set(cmd.name, freereelsCmd);
 }
 
-client.once('ready', () => {
+client.once('clientReady', () => {
     console.log(`Bot online sebagai ${client.user.tag}`);
 });
 
@@ -25,7 +26,7 @@ client.on('interactionCreate', async interaction => {
         await command.execute(interaction);
     } catch (err) {
         console.error(`Error menjalankan ${interaction.commandName}:`, err);
-        const reply = { content: 'Terjadi kesalahan saat menjalankan perintah.', ephemeral: true };
+        const reply = { content: 'Terjadi kesalahan saat menjalankan perintah.', flags: 64 };
         if (interaction.replied || interaction.deferred) {
             await interaction.followUp(reply).catch(() => {});
         } else {
@@ -34,4 +35,5 @@ client.on('interactionCreate', async interaction => {
     }
 });
 
+startWebServer();
 client.login(process.env.DISCORD_BOT_TOKEN);

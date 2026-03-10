@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FreeReels Player</title>
+<script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #0f0f0f; color: #fff; font-family: 'Segoe UI', sans-serif; height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+  .container { width: 100%; max-width: 900px; padding: 16px; }
+  h2 { text-align: center; margin-bottom: 12px; font-size: 1.1rem; color: #ccc; }
+  video { width: 100%; border-radius: 10px; background: #000; max-height: 80vh; }
+  .badge { text-align: center; margin-top: 10px; font-size: 0.8rem; color: #666; }
+  .error { text-align: center; color: #f44; font-size: 1rem; margin-top: 20px; }
+</style>
+</head>
+<body>
+<div class="container">
+  <h2 id="title">🎬 FreeReels Player</h2>
+  <video id="video" controls autoplay playsinline></video>
+  <div class="badge">FreeReels · Dubbing Indonesia</div>
+  <div class="error" id="error"></div>
+</div>
+<script>
+  const params = new URLSearchParams(location.search);
+  const src = params.get('url');
+  const title = params.get('title');
+  const ep = params.get('ep');
+
+  if (title) document.getElementById('title').textContent = (ep ? 'Episode ' + ep + ' - ' : '') + decodeURIComponent(title);
+
+  const video = document.getElementById('video');
+  if (!src) {
+    document.getElementById('error').textContent = 'URL video tidak ditemukan.';
+  } else if (Hls.isSupported()) {
+    const hls = new Hls({ maxBufferLength: 30, maxMaxBufferLength: 60 });
+    hls.loadSource(decodeURIComponent(src));
+    hls.attachMedia(video);
+    hls.on(Hls.Events.ERROR, (e, data) => {
+      if (data.fatal) document.getElementById('error').textContent = 'Gagal memuat video: ' + data.type;
+    });
+  } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+    video.src = decodeURIComponent(src);
+  } else {
+    document.getElementById('error').textContent = 'Browser tidak mendukung HLS. Gunakan Chrome atau Safari.';
+  }
+</script>
+</body>
+</html>
