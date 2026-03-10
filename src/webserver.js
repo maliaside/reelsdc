@@ -3,6 +3,9 @@ const path = require('path');
 const axios = require('axios');
 const { getStats } = require('./stats');
 
+let _botClient = null;
+function setBotClient(client) { _botClient = client; }
+
 const app = express();
 const PORT = 5000;
 
@@ -147,6 +150,32 @@ app.get('/api/stats', (req, res) => {
     res.json(getStats());
 });
 
+app.get('/api/bot/status', (req, res) => {
+    res.set('Cache-Control', 'no-cache');
+    const stats = getStats();
+    const c = _botClient;
+    const isReady = c && c.isReady && c.isReady();
+    res.json({
+        status: isReady ? 'online' : 'offline',
+        bot_name: isReady ? c.user.tag : null,
+        bot_id: isReady ? c.user.id : null,
+        bot_avatar: isReady ? c.user.displayAvatarURL({ size: 128 }) : null,
+        guild_count: isReady ? c.guilds.cache.size : 0,
+        uptime: stats.uptimeStr,
+        uptime_ms: stats.uptimeMs,
+        start_time: new Date(stats.startTime).toISOString(),
+        commands_total: stats.counts.total,
+        commands_per_platform: {
+            freereels: stats.counts.freereels,
+            reelshort: stats.counts.reelshort,
+            melolo: stats.counts.melolo,
+        },
+        downloads: stats.counts.downloads,
+        streams: stats.counts.streams,
+        errors: stats.counts.errors,
+    });
+});
+
 function startWebServer() {
     app.listen(PORT, '0.0.0.0', () => {
         console.log(`Web player berjalan di port ${PORT}`);
@@ -179,4 +208,4 @@ function getMeloloPlayerUrl(mp4url, title, ep) {
     return `${base}/player?${params.toString()}`;
 }
 
-module.exports = { startWebServer, getPlayerUrl, getDirectPlayerUrl, getMeloloPlayerUrl };
+module.exports = { startWebServer, setBotClient, getPlayerUrl, getDirectPlayerUrl, getMeloloPlayerUrl };

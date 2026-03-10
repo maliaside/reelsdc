@@ -1,6 +1,6 @@
 require('dotenv').config();
 const { Client, GatewayIntentBits, Collection } = require('discord.js');
-const { startWebServer } = require('./src/webserver');
+const { startWebServer, setBotClient } = require('./src/webserver');
 const dramaCmd = require('./src/commands/drama');
 const { trackCommand } = require('./src/stats');
 
@@ -12,7 +12,8 @@ process.on('uncaughtException', (err) => {
 });
 
 // Keep event loop alive 24/7
-setInterval(() => {}, 30_000);
+process.stdin.resume();
+setInterval(() => {}, 10_000);
 
 const client = new Client({ intents: [GatewayIntentBits.Guilds] });
 
@@ -23,6 +24,7 @@ for (const cmd of dramaCmd.data) {
 
 client.once('clientReady', () => {
     console.log(`Bot online sebagai ${client.user.tag}`);
+    setBotClient(client);
 });
 
 client.on('interactionCreate', async interaction => {
