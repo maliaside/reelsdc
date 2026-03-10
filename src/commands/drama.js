@@ -9,6 +9,7 @@ const rsApi = require('../api/reelshort');
 const mlApi = require('../api/melolo');
 const { downloadFreeReelsEpisode, downloadReelShortEpisode, downloadMeloloEpisode, cleanup } = require('../video');
 const { getPlayerUrl, getDirectPlayerUrl, getMeloloPlayerUrl } = require('../webserver');
+const { trackCommand } = require('../stats');
 
 // ─── Item normalizers ─────────────────────────────────────────────────────────
 
@@ -139,6 +140,7 @@ async function sendStreamLink(q, streamUrl, title, epNum, platform) {
         .setDescription(`File terlalu besar atau kualitas terlalu tinggi untuk Discord.\n\n**[▶ Klik untuk tonton di browser](${playerUrl})**\n\nLink streaming kualitas penuh tanpa kompresi.`)
         .setFooter({ text: `${LABELS[platform] || platform} · Streaming · Hanya kamu yang bisa melihat ini` });
     await q.editReply({ content: null, embeds: [embed] });
+    trackCommand({ platform, user: q.user?.username || 'unknown', action: `Ep ${epNum}`, title, result: 'stream' });
 }
 
 // ─── Video file sender ────────────────────────────────────────────────────────
@@ -154,6 +156,7 @@ async function sendVideoFile(q, filePath, sizeBytes, title, epNum, platform, qua
         .setDescription(`Kualitas: **${quality}** · Langsung putar di Discord ↓`)
         .setFooter({ text: `${LABELS[platform]} · ${sizeMB} MB · Hanya kamu yang melihat ini` });
     await q.editReply({ content: null, embeds: [embed], files: [attachment] });
+    trackCommand({ platform, user: q.user?.username || 'unknown', action: `Ep ${epNum} (${quality})`, title, result: 'download' });
 }
 
 // ─── FreeReels ────────────────────────────────────────────────────────────────
@@ -561,6 +564,7 @@ module.exports = {
 
                 await interaction.editReply({ content: `OK <@${userId}>, ketemu **${matched.length} drama** untuk **${judul}** ↓` });
                 await showList(interaction, matched, `Cari: "${judul}"`, userId);
+                trackCommand({ user: interaction.user.username, action: 'cari', title: judul, result: 'ok' });
 
             } else if (sub === 'foryou') {
                 const offset = interaction.options.getInteger('offset') || 0;
@@ -568,6 +572,7 @@ module.exports = {
                 const items = frExtract(data);
                 if (!items.length) return interaction.editReply({ content: '❌ Tidak ada data.' });
                 await showList(interaction, items, `FreeReels · For You (offset ${offset})`, userId);
+                trackCommand({ platform: 'freereels', user: interaction.user.username, action: 'foryou', result: 'ok' });
 
             } else if (sub === 'reelshort') {
                 const offset = interaction.options.getInteger('offset') || 0;
@@ -575,15 +580,18 @@ module.exports = {
                 const items = rsExtract(data);
                 if (!items.length) return interaction.editReply({ content: '❌ Tidak ada data.' });
                 await showList(interaction, items, `ReelShort · For You (offset ${offset})`, userId);
+                trackCommand({ platform: 'reelshort', user: interaction.user.username, action: 'foryou', result: 'ok' });
 
             } else if (sub === 'melolo') {
                 const data = await mlApi.getForYou();
                 const items = mlApi.parseForYouItems(data);
                 if (!items.length) return interaction.editReply({ content: '❌ Tidak ada data dari Melolo.' });
                 await showList(interaction, items, 'Melolo · For You', userId);
+                trackCommand({ platform: 'melolo', user: interaction.user.username, action: 'foryou', result: 'ok' });
             }
         } catch (err) {
             console.error('[drama]', err.message);
+            trackCommand({ user: interaction.user?.username || 'unknown', action: sub || 'unknown', result: 'error' });
             await interaction.editReply({ content: `❌ Terjadi kesalahan: **${err.message}**` }).catch(() => {});
         }
     }

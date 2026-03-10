@@ -2,6 +2,7 @@ require('dotenv').config();
 const { Client, GatewayIntentBits, Collection } = require('discord.js');
 const { startWebServer } = require('./src/webserver');
 const dramaCmd = require('./src/commands/drama');
+const { trackCommand } = require('./src/stats');
 
 process.on('unhandledRejection', (reason) => {
     console.error('[UnhandledRejection]', reason?.message || reason);
@@ -9,6 +10,9 @@ process.on('unhandledRejection', (reason) => {
 process.on('uncaughtException', (err) => {
     console.error('[UncaughtException]', err.message, err.stack);
 });
+
+// Keep event loop alive 24/7
+setInterval(() => {}, 30_000);
 
 const client = new Client({ intents: [GatewayIntentBits.Guilds] });
 

@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>NGEDRACIN Bot — Dashboard</title>
+<style>
+  :root {
+    --bg: #0e0e14;
+    --card: #16161f;
+    --border: #252535;
+    --accent: #7c6af7;
+    --fr: #5865F2;
+    --rs: #EB459E;
+    --ml: #FF6B35;
+    --green: #43b581;
+    --red: #ed4245;
+    --text: #e0e0f0;
+    --muted: #7a7a9a;
+    --font: 'Segoe UI', system-ui, sans-serif;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font-family: var(--font); min-height: 100vh; }
+
+  header {
+    display: flex; align-items: center; gap: 12px;
+    padding: 18px 28px;
+    background: var(--card);
+    border-bottom: 1px solid var(--border);
+  }
+  header .dot {
+    width: 10px; height: 10px; border-radius: 50%;
+    background: var(--green);
+    box-shadow: 0 0 6px var(--green);
+    animation: pulse 2s infinite;
+  }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+  header h1 { font-size: 1.15rem; font-weight: 600; letter-spacing: .5px; }
+  header .sub { font-size: .8rem; color: var(--muted); margin-left: auto; }
+
+  main { padding: 24px 28px; max-width: 1100px; margin: 0 auto; }
+
+  /* ─── Stat cards ─── */
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 14px; margin-bottom: 24px; }
+  .card {
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 12px; padding: 18px 20px;
+    position: relative; overflow: hidden;
+  }
+  .card::before {
+    content: ''; position: absolute; top: 0; left: 0; right: 0; height: 3px;
+    background: var(--accent);
+  }
+  .card.fr::before { background: var(--fr); }
+  .card.rs::before { background: var(--rs); }
+  .card.ml::before { background: var(--ml); }
+  .card.err::before { background: var(--red); }
+  .card .label { font-size: .72rem; color: var(--muted); text-transform: uppercase; letter-spacing: .8px; margin-bottom: 8px; }
+  .card .value { font-size: 1.9rem; font-weight: 700; line-height: 1; }
+  .card .sub-val { font-size: .75rem; color: var(--muted); margin-top: 4px; }
+
+  /* ─── Platform bar ─── */
+  .bar-section { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 18px 20px; margin-bottom: 24px; }
+  .bar-section h2 { font-size: .85rem; color: var(--muted); text-transform: uppercase; letter-spacing: .8px; margin-bottom: 14px; }
+  .bar-row { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+  .bar-row:last-child { margin-bottom: 0; }
+  .bar-label { width: 90px; font-size: .82rem; white-space: nowrap; }
+  .bar-track { flex: 1; height: 8px; background: var(--border); border-radius: 4px; overflow: hidden; }
+  .bar-fill { height: 100%; border-radius: 4px; transition: width .6s ease; }
+  .bar-count { width: 40px; text-align: right; font-size: .82rem; color: var(--muted); }
+
+  /* ─── Activity log ─── */
+  .activity { background: var(--card); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
+  .activity h2 { font-size: .85rem; color: var(--muted); text-transform: uppercase; letter-spacing: .8px; padding: 16px 20px; border-bottom: 1px solid var(--border); }
+  table { width: 100%; border-collapse: collapse; font-size: .82rem; }
+  th { padding: 10px 14px; text-align: left; color: var(--muted); font-weight: 500; font-size: .75rem; border-bottom: 1px solid var(--border); }
+  td { padding: 9px 14px; border-bottom: 1px solid #1a1a28; vertical-align: middle; }
+  tr:last-child td { border-bottom: none; }
+  tr:hover td { background: rgba(255,255,255,.02); }
+
+  .badge {
+    display: inline-block; padding: 2px 8px; border-radius: 20px;
+    font-size: .7rem; font-weight: 600; letter-spacing: .4px; text-transform: uppercase;
+  }
+  .badge.freereels { background: rgba(88,101,242,.2); color: #8da0ff; }
+  .badge.reelshort  { background: rgba(235,69,158,.2); color: #f07cc8; }
+  .badge.melolo     { background: rgba(255,107,53,.2);  color: #ff9a6c; }
+  .badge.-          { background: rgba(255,255,255,.05); color: var(--muted); }
+
+  .res.ok       { color: var(--green); }
+  .res.download { color: #7289da; }
+  .res.stream   { color: #f0b232; }
+  .res.error    { color: var(--red); }
+
+  .time { color: var(--muted); white-space: nowrap; }
+  .empty { padding: 40px; text-align: center; color: var(--muted); font-size: .9rem; }
+
+  footer { text-align: center; padding: 20px; font-size: .72rem; color: var(--muted); }
+</style>
+</head>
+<body>
+<header>
+  <div class="dot" id="statusDot"></div>
+  <h1>NGEDRACIN Bot</h1>
+  <span class="sub" id="lastRefresh">memuat...</span>
+</header>
+
+<main>
+  <!-- Stat cards -->
+  <div class="cards" id="cards">
+    <div class="card"><div class="label">Uptime</div><div class="value" id="uptime">—</div><div class="sub-val">sejak restart terakhir</div></div>
+    <div class="card"><div class="label">Total Perintah</div><div class="value" id="total">—</div><div class="sub-val" id="errCount">0 error</div></div>
+    <div class="card fr"><div class="label">FreeReels</div><div class="value" id="frCount">—</div><div class="sub-val">permintaan</div></div>
+    <div class="card rs"><div class="label">ReelShort</div><div class="value" id="rsCount">—</div><div class="sub-val">permintaan</div></div>
+    <div class="card ml"><div class="label">Melolo</div><div class="value" id="mlCount">—</div><div class="sub-val">permintaan</div></div>
+    <div class="card"><div class="label">Download</div><div class="value" id="dlCount">—</div><div class="sub-val" id="streamCount">0 stream</div></div>
+  </div>
+
+  <!-- Platform bar -->
+  <div class="bar-section">
+    <h2>Distribusi Platform</h2>
+    <div class="bar-row">
+      <span class="bar-label">🎭 FreeReels</span>
+      <div class="bar-track"><div class="bar-fill" id="barFr" style="background:var(--fr);width:0%"></div></div>
+      <span class="bar-count" id="pctFr">0%</span>
+    </div>
+    <div class="bar-row">
+      <span class="bar-label">🎬 ReelShort</span>
+      <div class="bar-track"><div class="bar-fill" id="barRs" style="background:var(--rs);width:0%"></div></div>
+      <span class="bar-count" id="pctRs">0%</span>
+    </div>
+    <div class="bar-row">
+      <span class="bar-label">🎥 Melolo</span>
+      <div class="bar-track"><div class="bar-fill" id="barMl" style="background:var(--ml);width:0%"></div></div>
+      <span class="bar-count" id="pctMl">0%</span>
+    </div>
+  </div>
+
+  <!-- Activity -->
+  <div class="activity">
+    <h2>Aktivitas Terbaru</h2>
+    <div id="actBody"></div>
+  </div>
+</main>
+
+<footer>Auto-refresh setiap 10 detik &nbsp;·&nbsp; NGEDRACIN😭 Bot</footer>
+
+<script>
+async function load() {
+  try {
+    const r = await fetch('/api/stats');
+    const d = await r.json();
+    const c = d.counts;
+
+    document.getElementById('uptime').textContent = d.uptimeStr;
+    document.getElementById('total').textContent = c.total;
+    document.getElementById('errCount').textContent = c.errors + ' error';
+    document.getElementById('frCount').textContent = c.freereels;
+    document.getElementById('rsCount').textContent = c.reelshort;
+    document.getElementById('mlCount').textContent = c.melolo;
+    document.getElementById('dlCount').textContent = c.downloads;
+    document.getElementById('streamCount').textContent = c.streams + ' stream';
+
+    const plat = c.freereels + c.reelshort + c.melolo || 1;
+    const pct = v => Math.round(v / plat * 100);
+    document.getElementById('barFr').style.width = pct(c.freereels) + '%';
+    document.getElementById('barRs').style.width = pct(c.reelshort) + '%';
+    document.getElementById('barMl').style.width = pct(c.melolo) + '%';
+    document.getElementById('pctFr').textContent = pct(c.freereels) + '%';
+    document.getElementById('pctRs').textContent = pct(c.reelshort) + '%';
+    document.getElementById('pctMl').textContent = pct(c.melolo) + '%';
+
+    const act = d.recentActivity;
+    const body = document.getElementById('actBody');
+    if (!act || act.length === 0) {
+      body.innerHTML = '<div class="empty">Belum ada aktivitas</div>';
+    } else {
+      const rows = act.map(a => {
+        const t = new Date(a.time);
+        const ts = t.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        const dateStr = t.toLocaleDateString('id-ID', { day: '2-digit', month: 'short' });
+        return `<tr>
+          <td class="time">${dateStr} ${ts}</td>
+          <td>${escHtml(a.user)}</td>
+          <td><span class="badge ${a.platform}">${a.platform}</span></td>
+          <td>${escHtml(a.action)}</td>
+          <td>${escHtml(a.title)}</td>
+          <td class="res ${a.result}">${a.result}</td>
+        </tr>`;
+      }).join('');
+      body.innerHTML = `<table>
+        <thead><tr><th>Waktu</th><th>User</th><th>Platform</th><th>Aksi</th><th>Judul</th><th>Hasil</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>`;
+    }
+
+    document.getElementById('statusDot').style.background = 'var(--green)';
+    document.getElementById('statusDot').style.boxShadow = '0 0 6px var(--green)';
+    const now = new Date().toLocaleTimeString('id-ID');
+    document.getElementById('lastRefresh').textContent = 'Diperbarui: ' + now;
+  } catch(e) {
+    document.getElementById('statusDot').style.background = 'var(--red)';
+    document.getElementById('statusDot').style.boxShadow = '0 0 6px var(--red)';
+    document.getElementById('lastRefresh').textContent = 'Gagal memuat data';
+  }
+}
+
+function escHtml(s) {
+  return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+load();
+setInterval(load, 10000);
+</script>
+</body>
+</html>

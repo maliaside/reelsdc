@@ -1,6 +1,7 @@
 const express = require('express');
 const path = require('path');
 const axios = require('axios');
+const { getStats } = require('./stats');
 
 const app = express();
 const PORT = 5000;
@@ -135,6 +136,16 @@ app.get('/proxy/dirseg', async (req, res) => {
 });
 
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
+app.get('/favicon.ico', (req, res) => res.status(204).end());
+
+app.get('/dashboard', (req, res) => {
+    res.sendFile(path.join(__dirname, 'dashboard.html'));
+});
+
+app.get('/api/stats', (req, res) => {
+    res.set('Cache-Control', 'no-cache');
+    res.json(getStats());
+});
 
 function startWebServer() {
     app.listen(PORT, '0.0.0.0', () => {
