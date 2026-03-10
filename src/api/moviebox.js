@@ -16,6 +16,7 @@ async function getTrending(page = 0) { return api(`/trending?page=${page}`); }
 async function search(query, page = 1) { return api(`/search?query=${encodeURIComponent(query)}&page=${page}`); }
 async function getDetail(subjectId) { return api(`/detail?subjectId=${subjectId}`); }
 async function getSources(subjectId) { return api(`/sources?subjectId=${subjectId}`); }
+async function getEpisodeSources(subjectId, season, episode) { return api(`/sources?subjectId=${subjectId}&season=${season}&episode=${episode}`); }
 
 function parseItems(data) {
     const raw = data?.items || data?.list || [];
@@ -45,4 +46,4 @@ function parseSources(data) {
         }));
 }
 
-module.exports = { getTrending, search, getDetail, getSources, parseItems, parseSources };
+module.exports = { getTrending, search, getDetail, getSources, getEpisodeSources, parseItems, parseSources };
