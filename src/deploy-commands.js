@@ -3,9 +3,7 @@ const { REST } = require('@discordjs/rest');
 const { Routes } = require('discord.js');
 
 const commands = [
-    ...require('./commands/freereels').data,
-    ...require('./commands/reelshort').data,
-    ...require('./commands/cari').data
+    ...require('./commands/drama').data
 ].map(cmd => cmd.toJSON());
 
 const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_BOT_TOKEN);

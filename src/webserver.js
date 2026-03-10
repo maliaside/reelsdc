@@ -95,6 +95,45 @@ app.get('/proxy/seg', async (req, res) => {
     }
 });
 
+// Proxy without auth headers (for ReelShort and other public streams)
+app.get('/proxy/direct', async (req, res) => {
+    const { url } = req.query;
+    if (!url) return res.status(400).send('Missing url');
+    try {
+        const response = await axios.get(decodeURIComponent(url), { responseType: 'text', timeout: 15000 });
+        const m3u8Text = response.data;
+        const baseUrl = getBaseUrl();
+        const sourceBase = decodeURIComponent(url).replace(/\/[^/]+\.m3u8.*$/, '/');
+
+        const rewritten = m3u8Text.split('\n').map(line => {
+            const trimmed = line.trim();
+            if (!trimmed || trimmed.startsWith('#')) return line;
+            const absUrl = trimmed.startsWith('http') ? trimmed : sourceBase + trimmed;
+            if (trimmed.endsWith('.m3u8')) return `${baseUrl}/proxy/direct?url=${encodeURIComponent(absUrl)}`;
+            return `${baseUrl}/proxy/dirseg?url=${encodeURIComponent(absUrl)}`;
+        }).join('\n');
+
+        res.set({ 'Content-Type': 'application/vnd.apple.mpegurl', 'Access-Control-Allow-Origin': '*', 'Cache-Control': 'no-cache' });
+        res.send(rewritten);
+    } catch (err) {
+        console.error('[proxy/direct]', err.message);
+        res.status(500).send('Proxy error: ' + err.message);
+    }
+});
+
+app.get('/proxy/dirseg', async (req, res) => {
+    const { url } = req.query;
+    if (!url) return res.status(400).send('Missing url');
+    try {
+        const response = await axios.get(decodeURIComponent(url), { responseType: 'stream', timeout: 30000 });
+        res.set({ 'Content-Type': response.headers['content-type'] || 'video/mp2t', 'Access-Control-Allow-Origin': '*', 'Cache-Control': 'public, max-age=3600' });
+        response.data.pipe(res);
+    } catch (err) {
+        console.error('[proxy/dirseg]', err.message);
+        res.status(500).send('Segment proxy error');
+    }
+});
+
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
 
 function startWebServer() {
@@ -106,12 +145,15 @@ function startWebServer() {
 function getPlayerUrl(m3u8url, title, ep) {
     const base = getBaseUrl();
     const proxiedM3u8 = `${base}/proxy/m3u8?url=${encodeURIComponent(m3u8url)}`;
-    const params = new URLSearchParams({
-        url: proxiedM3u8,
-        title: title || '',
-        ep: String(ep || '')
-    });
+    const params = new URLSearchParams({ url: proxiedM3u8, title: title || '', ep: String(ep || '') });
     return `${base}/player?${params.toString()}`;
 }
 
-module.exports = { startWebServer, getPlayerUrl };
+function getDirectPlayerUrl(m3u8url, title, ep) {
+    const base = getBaseUrl();
+    const proxiedM3u8 = `${base}/proxy/direct?url=${encodeURIComponent(m3u8url)}`;
+    const params = new URLSearchParams({ url: proxiedM3u8, title: title || '', ep: String(ep || '') });
+    return `${base}/player?${params.toString()}`;
+}
+
+module.exports = { startWebServer, getPlayerUrl, getDirectPlayerUrl };

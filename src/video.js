@@ -51,13 +51,27 @@ async function parseFreeReelsMasterM3u8(masterUrl) {
     return { lowestVideoUrl, audioUrl };
 }
 
+async function getM3u8Duration(m3u8url, headers = {}) {
+    try {
+        const res = await axios.get(m3u8url, { headers, responseType: 'text', timeout: 10000 });
+        let total = 0;
+        for (const line of res.data.split('\n')) {
+            if (line.startsWith('#EXTINF:')) {
+                total += parseFloat(line.split(':')[1]?.split(',')?.[0] || '0');
+            }
+        }
+        return total > 0 ? total : null;
+    } catch {
+        return null;
+    }
+}
+
 async function downloadSubtitle(subtitleUrl) {
     if (!subtitleUrl) return null;
     try {
         const res = await axios.get(subtitleUrl, { responseType: 'text', timeout: 10000 });
         const srtPath = path.join(os.tmpdir(), `fr_sub_${Date.now()}.srt`);
         fs.writeFileSync(srtPath, res.data, 'utf8');
-        console.log('[video] Subtitle saved:', srtPath);
         return srtPath;
     } catch (err) {
         console.warn('[video] Subtitle download failed:', err.message);
@@ -66,10 +80,10 @@ async function downloadSubtitle(subtitleUrl) {
 }
 
 function calcVideoBitrate(durationSec) {
-    const targetBytes = 7.5 * 1024 * 1024;
+    const targetBytes = 7 * 1024 * 1024;
     const totalKbps = Math.floor((targetBytes * 8) / 1000 / Math.max(durationSec, 30));
     const audioBitrate = 64;
-    return Math.max(200, totalKbps - audioBitrate);
+    return Math.max(150, totalKbps - audioBitrate);
 }
 
 async function downloadFreeReelsEpisode(masterM3u8Url, subtitleUrl = null, durationSec = null) {
@@ -77,71 +91,40 @@ async function downloadFreeReelsEpisode(masterM3u8Url, subtitleUrl = null, durat
     const tmpFile = path.join(os.tmpdir(), `fr_${Date.now()}.mp4`);
     let srtPath = null;
 
-    console.log('[video] FreeReels video:', lowestVideoUrl.substring(0, 80));
-    console.log('[video] FreeReels audio:', audioUrl?.substring(0, 80) || 'none');
-
+    console.log('[video] FR video:', lowestVideoUrl.substring(0, 80));
     srtPath = await downloadSubtitle(subtitleUrl);
 
     let ffmpegArgs;
 
     if (srtPath) {
         const escapedSrt = srtPath.replace(/\\/g, '/').replace(/:/g, '\\:');
-        const vidBitrate = durationSec ? calcVideoBitrate(durationSec) : 320;
+        const vidBitrate = durationSec ? calcVideoBitrate(durationSec) : 300;
         const maxBitrate = Math.floor(vidBitrate * 1.5);
-        console.log('[video] Bitrate target:', vidBitrate, 'kbps (duration:', durationSec, 's)');
 
-        const videoInput = [
-            '-allowed_extensions', 'ALL',
-            '-headers', FREEREELS_FFMPEG_HEADERS,
-            '-i', lowestVideoUrl
-        ];
-        const audioInput = audioUrl ? [
-            '-allowed_extensions', 'ALL',
-            '-headers', FREEREELS_FFMPEG_HEADERS,
-            '-i', audioUrl
-        ] : [];
+        const videoInput = ['-allowed_extensions', 'ALL', '-headers', FREEREELS_FFMPEG_HEADERS, '-i', lowestVideoUrl];
+        const audioInput = audioUrl ? ['-allowed_extensions', 'ALL', '-headers', FREEREELS_FFMPEG_HEADERS, '-i', audioUrl] : [];
 
         ffmpegArgs = [
-            '-y',
-            ...videoInput,
-            ...audioInput,
-            '-map', '0:v:0',
-            '-map', audioUrl ? '1:a:0' : '0:a:0',
+            '-y', ...videoInput, ...audioInput,
+            '-map', '0:v:0', '-map', audioUrl ? '1:a:0' : '0:a:0',
             '-vf', `subtitles=${escapedSrt}:force_style='FontName=Arial,FontSize=13,PrimaryColour=&Hffffff,OutlineColour=&H000000,BackColour=&H80000000,Bold=1,Outline=2,Shadow=1,Alignment=2'`,
-            '-c:v', 'libx264',
-            '-preset', 'ultrafast',
-            '-b:v', `${vidBitrate}k`,
-            '-maxrate', `${maxBitrate}k`,
-            '-bufsize', `${maxBitrate * 2}k`,
-            '-c:a', 'aac',
-            '-b:a', '64k',
-            '-movflags', '+faststart',
-            tmpFile
+            '-c:v', 'libx264', '-preset', 'ultrafast',
+            '-b:v', `${vidBitrate}k`, '-maxrate', `${maxBitrate}k`, '-bufsize', `${maxBitrate * 2}k`,
+            '-c:a', 'aac', '-b:a', '64k',
+            '-movflags', '+faststart', tmpFile
         ];
     } else if (audioUrl) {
         ffmpegArgs = [
             '-y',
-            '-allowed_extensions', 'ALL',
-            '-headers', FREEREELS_FFMPEG_HEADERS,
-            '-i', lowestVideoUrl,
-            '-allowed_extensions', 'ALL',
-            '-headers', FREEREELS_FFMPEG_HEADERS,
-            '-i', audioUrl,
-            '-map', '0:v:0',
-            '-map', '1:a:0',
-            '-c', 'copy',
-            '-movflags', '+faststart',
-            tmpFile
+            '-allowed_extensions', 'ALL', '-headers', FREEREELS_FFMPEG_HEADERS, '-i', lowestVideoUrl,
+            '-allowed_extensions', 'ALL', '-headers', FREEREELS_FFMPEG_HEADERS, '-i', audioUrl,
+            '-map', '0:v:0', '-map', '1:a:0',
+            '-c', 'copy', '-movflags', '+faststart', tmpFile
         ];
     } else {
         ffmpegArgs = [
-            '-y',
-            '-allowed_extensions', 'ALL',
-            '-headers', FREEREELS_FFMPEG_HEADERS,
-            '-i', lowestVideoUrl,
-            '-c', 'copy',
-            '-movflags', '+faststart',
-            tmpFile
+            '-y', '-allowed_extensions', 'ALL', '-headers', FREEREELS_FFMPEG_HEADERS, '-i', lowestVideoUrl,
+            '-c', 'copy', '-movflags', '+faststart', tmpFile
         ];
     }
 
@@ -154,33 +137,45 @@ async function downloadFreeReelsEpisode(masterM3u8Url, subtitleUrl = null, durat
     const stat = fs.statSync(tmpFile);
     if (stat.size > MAX_SIZE_BYTES) {
         fs.unlinkSync(tmpFile);
-        throw new Error(`File terlalu besar (${Math.round(stat.size / 1024 / 1024)}MB). Melebihi batas Discord 8MB.`);
+        const err = new Error(`File terlalu besar (${Math.round(stat.size / 1024 / 1024)}MB). Batas Discord 8MB.`);
+        err.streamFallback = true;
+        err.streamUrl = masterM3u8Url;
+        throw err;
     }
-
     return { filePath: tmpFile, sizeBytes: stat.size };
 }
 
 async function downloadReelShortEpisode(m3u8Url) {
     const tmpFile = path.join(os.tmpdir(), `rs_${Date.now()}.mp4`);
-    console.log('[video] ReelShort m3u8:', m3u8Url.substring(0, 80));
+    console.log('[video] RS m3u8:', m3u8Url.substring(0, 80));
+
+    // Get duration first to calculate target bitrate
+    const duration = await getM3u8Duration(m3u8Url);
+    const vidBitrate = duration ? calcVideoBitrate(duration) : 300;
+    const maxBitrate = Math.floor(vidBitrate * 1.5);
+    console.log('[video] RS duration:', duration?.toFixed(0), 's, bitrate target:', vidBitrate, 'kbps');
 
     const ffmpegArgs = [
         '-y',
         '-allowed_extensions', 'ALL',
         '-i', m3u8Url,
-        '-c', 'copy',
-        '-movflags', '+faststart',
-        tmpFile
+        '-map', '0:v:0', '-map', '0:a:0',
+        '-c:v', 'libx264', '-preset', 'ultrafast',
+        '-b:v', `${vidBitrate}k`, '-maxrate', `${maxBitrate}k`, '-bufsize', `${maxBitrate * 2}k`,
+        '-c:a', 'aac', '-b:a', '64k',
+        '-movflags', '+faststart', tmpFile
     ];
 
-    await execFileAsync('ffmpeg', ffmpegArgs, { timeout: 120_000 });
+    await execFileAsync('ffmpeg', ffmpegArgs, { timeout: 180_000 });
 
     const stat = fs.statSync(tmpFile);
     if (stat.size > MAX_SIZE_BYTES) {
         fs.unlinkSync(tmpFile);
-        throw new Error(`File terlalu besar (${Math.round(stat.size / 1024 / 1024)}MB). Melebihi batas Discord 8MB.`);
+        const err = new Error(`File terlalu besar (${Math.round(stat.size / 1024 / 1024)}MB). Batas Discord 8MB.`);
+        err.streamFallback = true;
+        err.streamUrl = m3u8Url;
+        throw err;
     }
-
     return { filePath: tmpFile, sizeBytes: stat.size };
 }
 
