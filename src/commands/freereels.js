@@ -104,20 +104,23 @@ async function sendEpisodeVideo(interaction, ep, epNum, info, isFollowUp = false
         return isFollowUp ? interaction.followUp(msg) : interaction.reply(msg);
     }
 
-    const title = info.name || info.title || 'Drama';
-    const statusMsg = { content: `⏳ Mengunduh **Episode ${epNum}** - ${title}... (mungkin 10-30 detik)`, flags: 64 };
+    const idSub = (ep.subtitle_list || []).find(s => s.language === 'id-ID');
+    const subtitleUrl = idSub?.subtitle || null;
 
-    let replied;
+    const title = info.name || info.title || 'Drama';
+    const subNote = subtitleUrl ? 'dengan subtitle Indonesia' : 'tanpa subtitle';
+    const statusMsg = { content: `⏳ Mengunduh **Episode ${epNum}** - ${title} (${subNote})... mungkin 20-60 detik`, flags: 64 };
+
     if (isFollowUp) {
-        replied = await interaction.reply(statusMsg);
+        await interaction.reply(statusMsg);
     } else {
         await interaction.deferReply({ flags: 64 });
-        replied = await interaction.editReply(statusMsg);
+        await interaction.editReply(statusMsg);
     }
 
     let filePath = null;
     try {
-        const result = await downloadEpisodeToFile(videoUrl);
+        const result = await downloadEpisodeToFile(videoUrl, subtitleUrl);
         filePath = result.filePath;
         const sizeMB = (result.sizeBytes / 1024 / 1024).toFixed(1);
 
@@ -128,20 +131,18 @@ async function sendEpisodeVideo(interaction, ep, epNum, info, isFollowUp = false
         const embed = new EmbedBuilder()
             .setColor(0xFEE75C)
             .setTitle(`🎬 Episode ${epNum} - ${title.slice(0, 200)}`)
-            .setDescription('Dubbing Indonesia · Langsung putar di Discord di bawah ini ↓')
+            .setDescription(subtitleUrl
+                ? 'Subtitle Indonesia ter-embed · Langsung putar di Discord di bawah ini ↓'
+                : 'Audio Mandarin · Langsung putar di Discord di bawah ini ↓')
             .setThumbnail(ep.cover || info.cover || null)
             .setFooter({ text: `FreeReels · ${sizeMB} MB` });
 
-        const editFn = isFollowUp
-            ? (opts) => interaction.editReply(opts)
-            : (opts) => interaction.editReply(opts);
-
-        await editFn({ content: null, embeds: [embed], files: [attachment] });
+        await interaction.editReply({ content: null, embeds: [embed], files: [attachment] });
 
     } catch (err) {
         console.error('[sendEpisodeVideo]', err.message);
         const errMsg = { content: `❌ Gagal mengunduh video: **${err.message}**`, embeds: [], files: [] };
-        await (isFollowUp ? interaction.editReply(errMsg) : interaction.editReply(errMsg)).catch(() => {});
+        await interaction.editReply(errMsg).catch(() => {});
     } finally {
         if (filePath) cleanup(filePath);
     }

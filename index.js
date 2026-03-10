@@ -3,6 +3,13 @@ const { Client, GatewayIntentBits, Collection } = require('discord.js');
 const { startWebServer } = require('./src/webserver');
 const freereelsCmd = require('./src/commands/freereels');
 
+process.on('unhandledRejection', (reason) => {
+    console.error('[UnhandledRejection]', reason?.message || reason);
+});
+process.on('uncaughtException', (err) => {
+    console.error('[UncaughtException]', err.message, err.stack);
+});
+
 const client = new Client({
     intents: [GatewayIntentBits.Guilds]
 });

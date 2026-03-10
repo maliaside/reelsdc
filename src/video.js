@@ -51,16 +51,78 @@ async function parseMasterM3u8(masterUrl) {
     return { lowestVideoUrl, audioUrl };
 }
 
-async function downloadEpisodeToFile(masterM3u8Url) {
+async function downloadSubtitle(subtitleUrl) {
+    if (!subtitleUrl) return null;
+    try {
+        const res = await axios.get(subtitleUrl, { responseType: 'text', timeout: 10000 });
+        const srtPath = path.join(os.tmpdir(), `freereels_sub_${Date.now()}.srt`);
+        fs.writeFileSync(srtPath, res.data, 'utf8');
+        console.log('[video] Subtitle downloaded:', srtPath);
+        return srtPath;
+    } catch (err) {
+        console.warn('[video] Subtitle download failed:', err.message);
+        return null;
+    }
+}
+
+async function downloadEpisodeToFile(masterM3u8Url, subtitleUrl = null) {
     const { lowestVideoUrl, audioUrl } = await parseMasterM3u8(masterM3u8Url);
     const tmpFile = path.join(os.tmpdir(), `freereels_${Date.now()}.mp4`);
+    let srtPath = null;
 
     console.log('[video] Video URL:', lowestVideoUrl);
     console.log('[video] Audio URL:', audioUrl);
+    console.log('[video] Subtitle URL:', subtitleUrl || 'none');
+
+    srtPath = await downloadSubtitle(subtitleUrl);
 
     let ffmpegArgs;
 
-    if (audioUrl) {
+    if (srtPath) {
+        // Re-encode with burned-in Indonesian subtitles
+        // Escape path for ffmpeg subtitle filter (escape colons and backslashes)
+        const escapedSrt = srtPath.replace(/\\/g, '/').replace(/:/g, '\\:');
+
+        if (audioUrl) {
+            ffmpegArgs = [
+                '-y',
+                '-allowed_extensions', 'ALL',
+                '-headers', FFMPEG_HEADERS,
+                '-i', lowestVideoUrl,
+                '-allowed_extensions', 'ALL',
+                '-headers', FFMPEG_HEADERS,
+                '-i', audioUrl,
+                '-map', '0:v:0',
+                '-map', '1:a:0',
+                '-vf', `subtitles=${escapedSrt}:force_style='FontName=Arial,FontSize=14,PrimaryColour=&Hffffff,OutlineColour=&H000000,BackColour=&H80000000,Bold=1,Outline=2,Shadow=1,Alignment=2'`,
+                '-c:v', 'libx264',
+                '-preset', 'ultrafast',
+                '-crf', '30',
+                '-c:a', 'aac',
+                '-b:a', '128k',
+                '-movflags', '+faststart',
+                tmpFile
+            ];
+        } else {
+            ffmpegArgs = [
+                '-y',
+                '-allowed_extensions', 'ALL',
+                '-headers', FFMPEG_HEADERS,
+                '-i', lowestVideoUrl,
+                '-map', '0:v:0',
+                '-map', '0:a:0',
+                '-vf', `subtitles=${escapedSrt}:force_style='FontName=Arial,FontSize=14,PrimaryColour=&Hffffff,OutlineColour=&H000000,BackColour=&H80000000,Bold=1,Outline=2,Shadow=1,Alignment=2'`,
+                '-c:v', 'libx264',
+                '-preset', 'ultrafast',
+                '-crf', '30',
+                '-c:a', 'aac',
+                '-b:a', '128k',
+                '-movflags', '+faststart',
+                tmpFile
+            ];
+        }
+    } else if (audioUrl) {
+        // Copy without re-encoding (no subtitle)
         ffmpegArgs = [
             '-y',
             '-allowed_extensions', 'ALL',
@@ -87,7 +149,11 @@ async function downloadEpisodeToFile(masterM3u8Url) {
         ];
     }
 
-    await execFileAsync('ffmpeg', ffmpegArgs, { timeout: 120_000 });
+    try {
+        await execFileAsync('ffmpeg', ffmpegArgs, { timeout: 180_000 });
+    } finally {
+        if (srtPath) { try { fs.unlinkSync(srtPath); } catch (_) {} }
+    }
 
     const stat = fs.statSync(tmpFile);
     if (stat.size > MAX_SIZE_BYTES) {
