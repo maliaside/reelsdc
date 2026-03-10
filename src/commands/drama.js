@@ -495,7 +495,7 @@ module.exports = {
         try {
             if (sub === 'cari') {
                 const judul = interaction.options.getString('judul');
-                await interaction.editReply({ content: `🔍 Mencari **"${judul}"** di FreeReels + ReelShort + Melolo...` });
+                await interaction.editReply({ content: `OK <@${userId}>, aku cari **${judul}**...` });
 
                 const allItems = [];
                 const seen = new Set();
@@ -546,13 +546,20 @@ module.exports = {
                 });
 
                 if (matched.length === 0) {
-                    return interaction.editReply({ content: `❌ **"${judul}"** tidak ditemukan.` });
+                    return interaction.editReply({ content: `❌ Tidak ketemu **"${judul}"**, coba kata kunci lain.` });
                 }
 
-                const rsFound = matched.filter(i => i._source === 'reelshort').length;
-                const frFound = matched.filter(i => i._source === 'freereels').length;
-                const mlFound = matched.filter(i => i._source === 'melolo').length;
-                await interaction.editReply({ content: `✅ **${matched.length} drama** ditemukan (${rsFound} ReelShort, ${mlFound} Melolo, ${frFound} FreeReels)` });
+                // Sort by title relevance: exact > starts with > contains > other
+                function titleScore(item) {
+                    const t = item.title.toLowerCase();
+                    if (t === kw) return 3;
+                    if (t.startsWith(kw)) return 2;
+                    if (t.includes(kw)) return 1;
+                    return 0;
+                }
+                matched.sort((a, b) => titleScore(b) - titleScore(a));
+
+                await interaction.editReply({ content: `OK <@${userId}>, ketemu **${matched.length} drama** untuk **${judul}** ↓` });
                 await showList(interaction, matched, `Cari: "${judul}"`, userId);
 
             } else if (sub === 'foryou') {

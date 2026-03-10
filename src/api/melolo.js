@@ -22,12 +22,18 @@ async function getStream(videoId) {
     return res.data;
 }
 
+function _fixCover(url) {
+    if (!url) return null;
+    // Melolo covers are HEIC (not supported by Discord). Proxy via wsrv.nl → JPEG.
+    return `https://wsrv.nl/?url=${encodeURIComponent(url)}&output=jpg&w=600&q=85`;
+}
+
 function _normalizeBook(b) {
     return {
         _source: 'melolo',
         key: String(b.book_id || ''),
         title: b.book_name || '',
-        cover: b.thumb_url || '',
+        cover: _fixCover(b.thumb_url),
         desc: b.abstract || b.sub_abstract || '',
         tags: [],
         episodes: b.serial_count || b.last_chapter_index || null
@@ -68,7 +74,7 @@ function parseDetail(raw) {
     }));
     return {
         title: vd.series_title || '',
-        cover: vd.series_cover || '',
+        cover: _fixCover(vd.series_cover),
         desc: vd.series_intro || '',
         episodeCount: vd.episode_cnt || episodes.length,
         episodes

@@ -194,6 +194,13 @@ async function downloadReelShortEpisode(m3u8Url, quality = '360p') {
 
 // ─── Melolo ───────────────────────────────────────────────────────────────────
 
+async function getRemoteFileSize(url) {
+    try {
+        const res = await axios.head(url, { timeout: 8000 });
+        return parseInt(res.headers['content-length'] || '0');
+    } catch { return 0; }
+}
+
 async function downloadMeloloEpisode(mp4Url, durationSec = null, quality = '360p') {
     const dur = durationSec || 120;
     const vidBitrate = calcBitrate(dur, quality);
@@ -203,14 +210,21 @@ async function downloadMeloloEpisode(mp4Url, durationSec = null, quality = '360p
 
     if (!vidBitrate) throw makeStreamFallback(mp4Url, `Episode terlalu panjang untuk kualitas ${quality} di Discord.`);
 
+    // Pre-check source file size — if too large, streaming is safer
+    const sourceSize = await getRemoteFileSize(mp4Url);
+    if (sourceSize > 50 * 1024 * 1024) {
+        console.log(`[video] ML source too large (${Math.round(sourceSize/1024/1024)}MB), streaming`);
+        throw makeStreamFallback(mp4Url, 'File sumber terlalu besar, gunakan streaming browser.');
+    }
+
     const maxBitrate = Math.floor(vidBitrate * 1.5);
 
     const args = [
-        '-y', '-i', mp4Url,
+        '-y', '-threads', '1', '-i', mp4Url,
         ...(quality === '360p' ? ['-vf', 'scale=360:-2'] : []),
         '-c:v', 'libx264', '-preset', 'ultrafast',
         '-b:v', `${vidBitrate}k`, '-maxrate', `${maxBitrate}k`, '-bufsize', `${maxBitrate * 2}k`,
-        '-c:a', 'aac', '-b:a', '64k',
+        '-c:a', 'aac', '-b:a', '64k', '-threads', '1',
         '-movflags', '+faststart', tmpFile
     ];
 
@@ -218,6 +232,7 @@ async function downloadMeloloEpisode(mp4Url, durationSec = null, quality = '360p
         await execFileAsync('ffmpeg', args, { timeout: 210_000 });
     } catch (err) {
         try { fs.unlinkSync(tmpFile); } catch (_) {}
+        console.error('[video] ML ffmpeg error:', err.message?.slice(0, 100));
         throw makeStreamFallback(mp4Url, 'Gagal encode video. Coba streaming di browser.');
     }
 
