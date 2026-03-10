@@ -140,6 +140,12 @@ function startWebServer() {
     app.listen(PORT, '0.0.0.0', () => {
         console.log(`Web player berjalan di port ${PORT}`);
     });
+    // Port 3000 required for Replit deployment health check (first localPort in .replit)
+    if (PORT !== 3000) {
+        app.listen(3000, '0.0.0.0', () => {
+            console.log('Health check berjalan di port 3000');
+        });
+    }
 }
 
 function getPlayerUrl(m3u8url, title, ep) {
