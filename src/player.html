@@ -97,10 +97,9 @@ if (plat === 'moviebox') {
     fetch('/resolve/mb?' + q)
       .then(r => r.json())
       .then(d => {
-        if (d.error) { hint.className=''; hint.textContent='❌ Gagal ambil link'; errmsg.textContent=d.error; return; }
+        if (d.error) { hint.className=''; hint.textContent='❌ ' + d.error; errmsg.textContent=d.error; return; }
         ready = d;
-        if (d.stale) markReady('⚠️ Link lama — tap ▶ coba dulu', true);
-        else         markReady('Tap ▶ untuk mulai tonton', false);
+        markReady('Tap ▶ untuk mulai tonton', false);
       })
       .catch(() => { hint.className=''; hint.textContent='❌ Gagal. Refresh halaman.'; });
 

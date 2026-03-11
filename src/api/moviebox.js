@@ -27,28 +27,14 @@ async function getEpisodeSources(subjectId, season, episode) {
     return res.data;
 }
 
-// Get episode sources — tries second variant if first returns a stale/expired URL
+// Simple wrapper — just fetch and return.
+// No "freshness" check: CDN URLs (bcdnxw.hakunaymatata.com) stay valid for hours.
+// The "try variant" logic triggered extra 429 rate limits with no benefit.
 async function getEpisodeSourcesBest(subjectId, season, episode) {
     const data = await getEpisodeSources(subjectId, season, episode);
     const sources = parseSources(data);
-    if (!sources.length) throw new Error('Tidak ada sumber video tersedia');
-
-    const now = Math.floor(Date.now() / 1000);
-    const age = urlAge(sources[0].url, now);
-
-    // If URL is very fresh (<10 min) via proxy, return immediately
-    if (age < 600) return data;
-
-    // Stale — try a second variant to bust sansekai cache
-    console.warn(`[moviebox/best] First URL ${age}s old, trying variant...`);
-    try {
-        const res2 = await client.get(`${BASE}/sources`, { params: { subjectId, season, episode, lang: 'zh' } });
-        const src2 = parseSources(res2.data);
-        if (src2.length && urlAge(src2[0].url, now) < age) return res2.data;
-    } catch (e) {
-        console.warn('[moviebox/best] variant failed:', e.message);
-    }
-    return data; // return whatever we have
+    if (!sources.length) throw new Error('Episode ini tidak tersedia atau terkunci.');
+    return data;
 }
 
 function urlAge(url, now) {
@@ -58,7 +44,7 @@ function urlAge(url, now) {
 }
 
 function parseItems(data) {
-    const raw = data?.items || data?.list || [];
+    const raw = data?.data?.items || data?.items || data?.list || [];
     return raw.filter(i => i.subjectId).map(i => ({
         _source: 'moviebox',
         key: i.subjectId,

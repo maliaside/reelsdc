@@ -157,28 +157,20 @@ function pickSource(sources, targetQ) {
     return sources.find(s => s.quality === targetQ)
         || sources.reduce((b, s) => Math.abs(s.quality - targetQ) < Math.abs(b.quality - targetQ) ? s : b, sources[0]);
 }
-function urlAge(url) {
-    const t = url?.match(/[?&]t=(\d+)/)?.[1];
-    return t ? Math.floor(Date.now() / 1000) - parseInt(t) : 0;
-}
 
 app.get('/resolve/mb', async (req, res) => {
     const { subjectId, season, episode, quality } = req.query;
     if (!subjectId) return res.status(400).json({ error: 'Missing subjectId' });
     const targetQ = parseInt(quality) || 360;
     try {
-        // Use smart multi-variant fetch for episodes (tries up to 3 cache keys)
         const srcData = season
             ? await mbApi.getEpisodeSourcesBest(subjectId, parseInt(season), parseInt(episode))
             : await mbApi.getSources(subjectId);
         const sources = mbApi.parseSources(srcData);
         if (!sources.length) return res.status(404).json({ error: 'Tidak ada sumber video tersedia' });
         const chosen = pickSource(sources, targetQ);
-        const age = urlAge(chosen.url);
-        const stale = age > 1800; // > 30 menit dianggap mungkin kedaluwarsa
-        if (stale) console.warn(`[resolve/mb] URL ${age}s old for ${subjectId} S${season}E${episode}`);
         res.set('Access-Control-Allow-Origin', '*');
-        res.json({ url: chosen.url, quality: chosen.quality, sizeMB: chosen.sizeMB, stale, age });
+        res.json({ url: chosen.url, quality: chosen.quality, sizeMB: chosen.sizeMB });
     } catch (err) {
         console.error('[resolve/mb]', err.message);
         res.status(502).json({ error: err.message });
