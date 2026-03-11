@@ -157,10 +157,9 @@ function pickSource(sources, targetQ) {
     return sources.find(s => s.quality === targetQ)
         || sources.reduce((b, s) => Math.abs(s.quality - targetQ) < Math.abs(b.quality - targetQ) ? s : b, sources[0]);
 }
-function isStale(url) {
+function urlAge(url) {
     const t = url?.match(/[?&]t=(\d+)/)?.[1];
-    if (!t) return false;
-    return parseInt(t) < Math.floor(Date.now() / 1000) - 120; // older than 2 min
+    return t ? Math.floor(Date.now() / 1000) - parseInt(t) : 0;
 }
 
 app.get('/resolve/mb', async (req, res) => {
@@ -168,33 +167,18 @@ app.get('/resolve/mb', async (req, res) => {
     if (!subjectId) return res.status(400).json({ error: 'Missing subjectId' });
     const targetQ = parseInt(quality) || 360;
     try {
-        // First attempt
+        // Use smart multi-variant fetch for episodes (tries up to 3 cache keys)
         const srcData = season
-            ? await mbApi.getEpisodeSources(subjectId, parseInt(season), parseInt(episode))
+            ? await mbApi.getEpisodeSourcesBest(subjectId, parseInt(season), parseInt(episode))
             : await mbApi.getSources(subjectId);
         const sources = mbApi.parseSources(srcData);
         if (!sources.length) return res.status(404).json({ error: 'Tidak ada sumber video tersedia' });
-        let chosen = pickSource(sources, targetQ);
-
-        // If URL looks stale (> 2 min old), try alternate param format to bust the cache
-        if (season && isStale(chosen.url)) {
-            console.warn('[resolve/mb] Stale URL detected, trying fresh variant...');
-            try {
-                const freshData = await mbApi.getEpisodeSourcesFresh(subjectId, parseInt(season), parseInt(episode));
-                const freshSources = mbApi.parseSources(freshData);
-                if (freshSources.length) {
-                    const freshChosen = pickSource(freshSources, targetQ);
-                    if (!isStale(freshChosen.url)) chosen = freshChosen;
-                }
-            } catch (retryErr) {
-                console.warn('[resolve/mb] Fresh variant failed:', retryErr.message);
-            }
-        }
-
+        const chosen = pickSource(sources, targetQ);
+        const age = urlAge(chosen.url);
+        const stale = age > 1800; // > 30 menit dianggap mungkin kedaluwarsa
+        if (stale) console.warn(`[resolve/mb] URL ${age}s old for ${subjectId} S${season}E${episode}`);
         res.set('Access-Control-Allow-Origin', '*');
-        const staleFlag = isStale(chosen.url);
-        if (staleFlag) console.warn('[resolve/mb] Serving potentially stale URL for', subjectId, season, episode);
-        res.json({ url: chosen.url, quality: chosen.quality, sizeMB: chosen.sizeMB, stale: staleFlag });
+        res.json({ url: chosen.url, quality: chosen.quality, sizeMB: chosen.sizeMB, stale, age });
     } catch (err) {
         console.error('[resolve/mb]', err.message);
         res.status(502).json({ error: err.message });
