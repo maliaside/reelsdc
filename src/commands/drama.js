@@ -136,11 +136,7 @@ async function showQualityPicker(c, userId, epLabel, callback) {
             await c.editReply({ content: `❌ Terjadi kesalahan: ${err.message}`, components: [] }).catch(() => {});
         }
     });
-    qCol.on('end', (col, reason) => {
-        if (reason === 'time' && col.size === 0) {
-            c.editReply({ content: '⏱️ Waktu habis. Pilih episode lagi.', components: [] }).catch(() => {});
-        }
-    });
+    qCol.on('end', () => {});
 }
 
 // ─── Next episode button helper ───────────────────────────────────────────────
@@ -173,9 +169,7 @@ async function attachNextEpBtn(interaction, nextEpNum, userId, onNext) {
                 console.error('[nextEpBtn]', err.message);
             }
         });
-        col.on('end', (col2, reason) => {
-            if (reason === 'time') interaction.editReply({ components: [] }).catch(() => {});
-        });
+        col.on('end', () => {});
     } catch (err) {
         if (err.code === 10062 || err.code === 40060) return;
         console.error('[attachNextEpBtn]', err.message);
@@ -304,7 +298,7 @@ async function showFrDetail(interaction, key, userId) {
                 console.error('[frDetail collect]', err.message);
             }
         });
-        col.on('end', () => interaction.editReply({ components: [] }).catch(() => {}));
+        col.on('end', () => {});
     } catch (err) {
         console.error('[frDetail]', err.message);
         interaction.editReply({ content: `❌ Gagal: ${err.message}` }).catch(() => {});
@@ -417,7 +411,7 @@ async function showRsDetail(interaction, bookId, userId) {
                 console.error('[rsDetail collect]', err.message);
             }
         });
-        col.on('end', () => interaction.editReply({ components: [] }).catch(() => {}));
+        col.on('end', () => {});
     } catch (err) {
         console.error('[rsDetail]', err.message);
         interaction.editReply({ content: `❌ Gagal: ${err.message}` }).catch(() => {});
@@ -520,7 +514,7 @@ async function showMlDetail(interaction, bookId, userId) {
                 console.error('[mlDetail collect]', err.message);
             }
         });
-        col.on('end', () => interaction.editReply({ components: [] }).catch(() => {}));
+        col.on('end', () => {});
     } catch (err) {
         console.error('[mlDetail]', err.message);
         interaction.editReply({ content: `❌ Gagal: ${err.message}` }).catch(() => {});
@@ -600,7 +594,7 @@ async function showMbDetail(interaction, subjectId, userId) {
                     console.error('[mb/watch]', err.message);
                 }
             });
-            qcol.on('end', () => interaction.editReply({ components: [] }).catch(() => {}));
+            qcol.on('end', () => {});
             return;
         }
 
@@ -691,9 +685,7 @@ async function showMbDetail(interaction, subjectId, userId) {
                 console.error('[mb/series]', err.message);
             }
         });
-        col.on('end', (_, reason) => {
-            if (reason !== 'epSelected') interaction.editReply({ components: [] }).catch(() => {});
-        });
+        col.on('end', () => {});
     } catch (err) {
         console.error('[mb/detail]', err.message);
         interaction.editReply({ content: `❌ Gagal: ${err.message}` }).catch(() => {});
@@ -741,7 +733,7 @@ async function showList(interaction, items, listTitle, userId, useFollowUp = fal
             console.error('[listCollect]', err.message);
         }
     });
-    col.on('end', () => msg.edit({ components: [] }).catch(() => {}));
+    col.on('end', () => {});
 }
 
 // ─── Command ──────────────────────────────────────────────────────────────────
