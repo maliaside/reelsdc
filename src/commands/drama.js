@@ -535,13 +535,22 @@ async function showMbDetail(interaction, subjectId, userId) {
 
         async function renderEpisodePicker(target) {
             const season = seasons.find(s => s.se === currentSe) || seasons[0];
-            const maxEp = season.maxEp;
+            // fallback: pakai allEp (comma-separated) kalau maxEp kosong
+            let maxEp = parseInt(season.maxEp) || 0;
+            if (!maxEp && season.allEp) maxEp = season.allEp.split(',').filter(Boolean).length;
+            if (!maxEp) maxEp = 1; // minimal 1 episode supaya tidak crash
+
             const start = epPage * PAGE_SIZE + 1;
             const end = Math.min(start + PAGE_SIZE - 1, maxEp);
 
             const options = [];
             for (let ep = start; ep <= end; ep++) {
                 options.push(new StringSelectMenuOptionBuilder().setLabel(`Episode ${ep}`).setValue(`${ep}`));
+            }
+
+            // Discord tidak boleh dropdown kosong
+            if (!options.length) {
+                return target.editReply({ content: '❌ Data episode tidak tersedia untuk season ini.', embeds: [], components: [] });
             }
 
             const rows = [
