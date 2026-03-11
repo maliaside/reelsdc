@@ -633,12 +633,19 @@ async function showMbDetail(interaction, subjectId, userId) {
 
 // ─── Public list view ─────────────────────────────────────────────────────────
 
-async function showList(interaction, items, listTitle, userId) {
-    if (items.length === 0) return interaction.editReply({ content: '❌ Tidak ada drama ditemukan.' });
+async function showList(interaction, items, listTitle, userId, useFollowUp = false) {
+    if (items.length === 0) return;
     let idx = 0;
-    const cid = `list_${interaction.id}`;
+    const cid = `list_${interaction.id}_${useFollowUp ? 'fu' : 'ed'}`;
+    const payload = { embeds: [buildListEmbed(items[0], 0, items.length, listTitle)], components: [buildNavRow(cid, 0, items.length, items[0])] };
 
-    const msg = await interaction.editReply({ embeds: [buildListEmbed(items[0], 0, items.length, listTitle)], components: [buildNavRow(cid, 0, items.length, items[0])] });
+    let msg;
+    if (useFollowUp) {
+        msg = await interaction.followUp({ ...payload, flags: 64 });
+    } else {
+        await interaction.editReply(payload);
+        msg = await interaction.fetchReply();
+    }
 
     const col = msg.createMessageComponentCollector({ time: 180_000 });
     col.on('collect', async btn => {
@@ -664,7 +671,7 @@ async function showList(interaction, items, listTitle, userId) {
             console.error('[listCollect]', err.message);
         }
     });
-    col.on('end', () => interaction.editReply({ components: [] }).catch(() => {}));
+    col.on('end', () => msg.edit({ components: [] }).catch(() => {}));
 }
 
 // ─── Command ──────────────────────────────────────────────────────────────────
@@ -780,8 +787,24 @@ module.exports = {
                 }
                 matched.sort((a, b) => titleScore(b) - titleScore(a));
 
-                await interaction.editReply({ content: `OK <@${userId}>, ketemu **${matched.length} drama** untuk **${judul}** ↓` });
-                await showList(interaction, matched, `Cari: "${judul}"`, userId);
+                // Pisah dua rak: Drama & Reels vs MovieBox
+                const dramaItems = matched.filter(i => i._source !== 'moviebox');
+                const mbItems    = matched.filter(i => i._source === 'moviebox');
+
+                const parts = [];
+                if (dramaItems.length) parts.push(`**${dramaItems.length} Drama & Reels**`);
+                if (mbItems.length)    parts.push(`**${mbItems.length} Film MovieBox**`);
+
+                await interaction.editReply({ content: `🔍 <@${userId}> — Hasil pencarian **"${judul}"**: ${parts.join(' + ')} ↓` });
+
+                // Dua rak terpisah, keduanya muncul sebagai pesan followUp
+                if (dramaItems.length > 0) {
+                    await showList(interaction, dramaItems, `📺 Drama & Reels — "${judul}"`, userId, true);
+                }
+                if (mbItems.length > 0) {
+                    await showList(interaction, mbItems, `🎬 MovieBox — "${judul}"`, userId, true);
+                }
+
                 trackCommand({ user: interaction.user.username, action: 'cari', title: judul, result: 'ok' });
 
             } else if (sub === 'foryou') {

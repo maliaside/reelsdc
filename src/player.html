@@ -6,48 +6,88 @@
 <title>Drama Player</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
-  body { background: #0f0f0f; color: #fff; font-family: 'Segoe UI', sans-serif; height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+  body { background: #0f0f0f; color: #fff; font-family: 'Segoe UI', sans-serif; min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; }
   .container { width: 100%; max-width: 900px; padding: 16px; }
   h2 { text-align: center; margin-bottom: 12px; font-size: 1.1rem; color: #ccc; }
-  video { width: 100%; border-radius: 10px; background: #000; max-height: 80vh; }
-  .badge { text-align: center; margin-top: 10px; font-size: 0.8rem; color: #666; }
+  .player-wrap { position: relative; width: 100%; }
+  video { width: 100%; border-radius: 10px; background: #000; max-height: 78vh; display: block; }
+  #play-overlay {
+    position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    background: rgba(0,0,0,0.55); border-radius: 10px; cursor: pointer; gap: 12px;
+  }
+  #play-overlay.hidden { display: none; }
+  #play-btn {
+    font-size: 2rem; background: rgba(255,255,255,0.15); border: 2.5px solid #fff;
+    border-radius: 50%; width: 72px; height: 72px; cursor: pointer; color: #fff;
+    display: flex; align-items: center; justify-content: center; transition: background .2s;
+    padding-left: 4px;
+  }
+  #play-btn:hover { background: rgba(255,255,255,0.3); }
+  #play-hint { font-size: 0.85rem; color: #ccc; }
+  .badge { text-align: center; margin-top: 10px; font-size: 0.8rem; color: #666; min-height: 1.2em; }
   @keyframes pulse { 0%,100%{opacity:.4} 50%{opacity:1} }
   .loading { animation: pulse 1.2s ease-in-out infinite; }
-  .error { text-align: center; color: #f44; font-size: 1rem; margin-top: 20px; }
+  .error { text-align: center; color: #f55; font-size: 0.95rem; margin-top: 14px; }
 </style>
 </head>
 <body>
 <div class="container">
   <h2 id="title">🎬 Drama Player</h2>
-  <video id="video" controls autoplay playsinline></video>
-  <div class="badge" id="badge">Loading...</div>
+  <div class="player-wrap">
+    <video id="video" controls playsinline preload="none"></video>
+    <div id="play-overlay">
+      <button id="play-btn">▶</button>
+      <span id="play-hint">Tap untuk mulai</span>
+    </div>
+  </div>
+  <div class="badge" id="badge"></div>
   <div class="error" id="error"></div>
 </div>
 <script src="/hls.js"></script>
 <script>
-  const params = new URLSearchParams(location.search);
-  const src = params.get('url');
-  const title = params.get('title');
-  const ep = params.get('ep');
+  const params  = new URLSearchParams(location.search);
+  const src     = params.get('url');
+  const title   = params.get('title');
+  const ep      = params.get('ep');
   const platform = params.get('platform') || '';
 
   if (title) {
     const decoded = decodeURIComponent(title);
     const seLabel = params.get('season') && params.get('episode')
-      ? `S${params.get('season')}E${params.get('episode')} · ` : (ep ? 'Episode ' + ep + ' - ' : '');
+      ? `S${params.get('season')}E${params.get('episode')} · `
+      : (ep ? `Episode ${ep} — ` : '');
     document.getElementById('title').textContent = seLabel + decoded;
     document.title = decoded;
   }
 
-  const badge = document.getElementById('badge');
-  const video = document.getElementById('video');
-  const errEl = document.getElementById('error');
+  const badge   = document.getElementById('badge');
+  const video   = document.getElementById('video');
+  const errEl   = document.getElementById('error');
+  const overlay = document.getElementById('play-overlay');
+  const playBtn = document.getElementById('play-btn');
+  const hint    = document.getElementById('play-hint');
 
-  function setError(msg) { errEl.textContent = msg; badge.textContent = ''; }
+  function setError(msg) {
+    errEl.textContent = msg;
+    badge.textContent = '';
+    badge.className = 'badge';
+    overlay.classList.add('hidden');
+  }
+
+  function showOverlay(hintText) {
+    hint.textContent = hintText || 'Tap untuk mulai';
+    overlay.classList.remove('hidden');
+  }
+
+  function hideOverlay() {
+    overlay.classList.add('hidden');
+  }
 
   let mbResolveParams = null;
 
-  function playMp4(cdnUrl, qualityLabel, stale) {
+  function startMp4(cdnUrl, qualityLabel, stale) {
+    hideOverlay();
     badge.className = 'badge';
     badge.textContent = 'MovieBox · ' + qualityLabel + 'p · Streaming' + (stale ? ' ⚠️' : '');
     video.setAttribute('referrerpolicy', 'no-referrer');
@@ -56,15 +96,18 @@
     video.addEventListener('error', () => {
       if (!retried && mbResolveParams) {
         retried = true;
+        badge.className = 'badge loading';
         badge.textContent = 'MovieBox · Mencoba ulang...';
         errEl.textContent = '';
         fetch('/resolve/mb?' + mbResolveParams.toString() + '&_r=' + Date.now())
           .then(r => r.json())
           .then(data2 => {
-            if (data2.error) return setError('Gagal: ' + data2.error + ' · Klik quality di Discord lagi.');
+            if (data2.error) return setError('Gagal: ' + data2.error + ' — Klik quality di Discord lagi.');
             if (data2.url !== cdnUrl) {
               video.src = data2.url;
-              badge.textContent = 'MovieBox · ' + data2.quality + 'p · Streaming (retried)';
+              badge.className = 'badge';
+              badge.textContent = 'MovieBox · ' + data2.quality + 'p · Streaming (retry)';
+              video.play().catch(() => {});
             } else {
               setError('Link kedaluwarsa. Kembali ke Discord dan pilih kualitas lagi.');
             }
@@ -74,67 +117,83 @@
         setError('Gagal memuat video. Kembali ke Discord dan pilih kualitas lagi.');
       }
     });
+    video.play().catch(() => {});
   }
 
-  // ── MovieBox: resolve fresh CDN URL at load time ──────────────────────────
+  // ── MovieBox ──────────────────────────────────────────────────────────────
   if (platform === 'moviebox') {
     const subjectId = params.get('subjectId');
-    if (!subjectId) return setError('Parameter tidak lengkap.');
-    badge.className = 'badge loading';
-    badge.textContent = 'MovieBox · Memuat link... (maks ~5 detik)';
-    mbResolveParams = new URLSearchParams({ subjectId, quality: params.get('quality') || '360' });
-    if (params.get('season')) mbResolveParams.set('season', params.get('season'));
-    if (params.get('episode')) mbResolveParams.set('episode', params.get('episode'));
-    fetch('/resolve/mb?' + mbResolveParams.toString())
-      .then(r => r.json())
-      .then(data => {
-        if (data.error) return setError('Gagal mendapat link: ' + data.error);
-        playMp4(data.url, data.quality, data.stale);
-      })
-      .catch(e => setError('Gagal resolve URL: ' + e.message));
+    if (!subjectId) { setError('Parameter tidak lengkap.'); }
+    else {
+      mbResolveParams = new URLSearchParams({ subjectId, quality: params.get('quality') || '360' });
+      if (params.get('season'))  mbResolveParams.set('season',  params.get('season'));
+      if (params.get('episode')) mbResolveParams.set('episode', params.get('episode'));
 
-  // ── HLS / other platforms ─────────────────────────────────────────────────
+      showOverlay('Tap ▶ untuk load & tonton');
+
+      playBtn.addEventListener('click', () => {
+        hideOverlay();
+        badge.className = 'badge loading';
+        badge.textContent = 'MovieBox · Memuat link...';
+        fetch('/resolve/mb?' + mbResolveParams.toString())
+          .then(r => r.json())
+          .then(data => {
+            if (data.error) return setError('Gagal mendapat link: ' + data.error);
+            startMp4(data.url, data.quality, data.stale);
+          })
+          .catch(e => setError('Gagal resolve URL: ' + e.message));
+      }, { once: true });
+    }
+
+  // ── Platform lain (HLS / direct MP4) ──────────────────────────────────────
   } else if (!src) {
     setError('URL video tidak ditemukan.');
   } else {
     const resolvedSrc = decodeURIComponent(src);
-    const isHLS = resolvedSrc.includes('.m3u8') || resolvedSrc.includes('/proxy/m3u8') || resolvedSrc.includes('/proxy/direct');
+    const isHLS = resolvedSrc.includes('.m3u8')
+               || resolvedSrc.includes('/proxy/m3u8')
+               || resolvedSrc.includes('/proxy/direct');
+    const platLabel = { melolo: 'Melolo', reelshort: 'ReelShort', freereels: 'FreeReels' }[platform] || 'Video';
 
-    if (isHLS) {
-      const platLabel = { melolo: 'Melolo', reelshort: 'ReelShort', freereels: 'FreeReels' }[platform] || platform;
-      badge.textContent = platLabel + ' · Streaming HLS';
-      if (typeof Hls === 'undefined') {
-        // hls.js gagal dimuat dari CDN — coba native HLS (Safari/iOS)
-        if (video.canPlayType('application/vnd.apple.mpegurl')) {
+    showOverlay('Tap ▶ untuk tonton');
+
+    playBtn.addEventListener('click', () => {
+      hideOverlay();
+      if (isHLS) {
+        badge.textContent = platLabel + ' · Streaming HLS';
+        badge.className = 'badge';
+        if (typeof Hls === 'undefined') {
+          if (video.canPlayType('application/vnd.apple.mpegurl')) {
+            video.src = resolvedSrc;
+            badge.textContent = platLabel + ' · Native HLS';
+            video.play().catch(() => {});
+          } else {
+            setError('Gagal memuat player HLS. Coba refresh halaman.');
+          }
+        } else if (Hls.isSupported()) {
+          const hls = new Hls({ maxBufferLength: 30, maxMaxBufferLength: 60 });
+          hls.loadSource(resolvedSrc);
+          hls.attachMedia(video);
+          hls.on(Hls.Events.MANIFEST_PARSED, () => { video.play().catch(() => {}); });
+          hls.on(Hls.Events.ERROR, (e, data) => {
+            if (data.fatal) setError('Gagal memuat video: ' + data.type + ' — ' + (data.details || ''));
+          });
+        } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
           video.src = resolvedSrc;
           badge.textContent = platLabel + ' · Native HLS';
+          video.play().catch(() => {});
         } else {
-          setError('Gagal memuat player HLS. Coba refresh halaman atau gunakan WiFi.');
+          setError('Browser tidak mendukung HLS. Gunakan Chrome atau Safari.');
         }
-      } else if (Hls.isSupported()) {
-        const hls = new Hls({ maxBufferLength: 30, maxMaxBufferLength: 60 });
-        hls.loadSource(resolvedSrc);
-        hls.attachMedia(video);
-        hls.on(Hls.Events.MANIFEST_PARSED, () => { badge.textContent = badge.textContent; });
-        hls.on(Hls.Events.ERROR, (e, data) => {
-          if (data.fatal) setError('Gagal memuat video HLS: ' + data.type + ' - ' + (data.details || ''));
-        });
-      } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-        video.src = resolvedSrc;
-        badge.textContent = 'Native HLS';
       } else {
-        setError('Browser tidak mendukung HLS. Gunakan Chrome atau Safari.');
+        const quality = params.get('quality');
+        badge.textContent = platLabel + (quality ? ` · ${quality}p` : '') + ' · Streaming';
+        badge.className = 'badge';
+        video.src = resolvedSrc;
+        video.addEventListener('error', () => setError('Gagal memuat video MP4. Coba refresh halaman.'));
+        video.play().catch(() => {});
       }
-    } else {
-      // Direct MP4 (Melolo)
-      const platLabelMp4 = { melolo: 'Melolo' }[platform] || 'Video';
-      const quality = params.get('quality');
-      badge.textContent = platLabelMp4 + (quality ? ` · ${quality}p` : '') + ' · Streaming';
-      video.src = resolvedSrc;
-      video.addEventListener('error', () => {
-        setError('Gagal memuat video MP4. Coba refresh halaman.');
-      });
-    }
+    }, { once: true });
   }
 </script>
 </body>
