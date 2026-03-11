@@ -8,7 +8,8 @@ Bot Discord 24/7 untuk menonton drama/film dari 4 platform: FreeReels, ReelShort
 index.js                    # Entry point: Discord client + keepalive interval
 src/
   api/
-    freereels.js            # Wrapper API FreeReels (foryou, search, detail)
+    client.js               # axios tanpa proxy; rate limiter 1s antar sansekai calls; auto-retry 429
+    freereels.js            # Wrapper API FreeReels (foryou, homepage, animepage, detail)
     reelshort.js            # Wrapper API ReelShort (foryou, search, detail, episode)
     melolo.js               # Wrapper API Melolo (forYou, search, detail, stream)
     moviebox.js             # Wrapper API MovieBox (trending, search, detail, sources)
@@ -27,35 +28,53 @@ package.json
 
 | Command | Deskripsi |
 |---------|-----------|
-| `/drama cari <judul>` | Cari drama di semua 3 platform sekaligus |
+| `/drama cari <judul>` | Cari drama di semua platform sekaligus |
 | `/drama foryou [offset]` | FreeReels For You |
 | `/drama reelshort [offset]` | ReelShort For You |
 | `/drama melolo` | Melolo For You |
+| `/drama moviebox [page]` | MovieBox Trending |
 
 ## Alur Menonton
 
 1. User pakai salah satu subcommand → daftar drama embed dengan tombol navigasi
 2. Klik **📋 Detail & Tonton** → detail + dropdown pilih episode
 3. Pilih episode → quality picker: 📱 360p Discord / 📺 720p Discord / 🌐 Browser
-4. Bot encode + kirim mp4 ke Discord (ephemeral), atau beri stream link jika >8MB
+4. Bot encode + kirim mp4 ke Discord (ephemeral), atau beri stream link jika >8MB / episode >150s
 
 ## Platform Details
 
 ### FreeReels
 - Video: HLS (fMP4/CMAF) dari mydramawave.com; butuh Referer/Origin header
 - Audio Mandarin + subtitle Indonesia (SRT, diburn via ffmpeg libass)
-- Encode: scale=360p, target <7MB
+- Encode: scale=360p, target bitrate = ~7MB / durasi
+- Durasi > 150s → stream fallback otomatis
 
 ### ReelShort
 - Video: HLS (TS segments); tidak butuh auth headers
 - Audio embedded dalam TS
 - Kualitas: 360p / 720p / streaming
+- Durasi > 150s → stream fallback otomatis
 
 ### Melolo
 - Video: MP4 langsung dari TikTok CDN (CORS terbuka)
 - Cover HEIC dikonversi via wsrv.nl proxy → JPEG
-- Pre-check source size (>50MB → langsung streaming)
-- Encode: `-threads 1` untuk cegah OOM crash
+- Jika source < 8MB → kirim LANGSUNG tanpa encode (kualitas asli, super cepat)
+- Jika source > 8MB dan dur <= 150s → re-encode ke target bitrate
+- Jika dur > 150s → stream fallback otomatis
+
+### MovieBox
+- Video: MP4 dari bcdnxw.hakunaymatata.com (CDN blocks server IP, OK dari browser user)
+- `/resolve/mb` endpoint: fetch fresh CDN URL dari sansekai, kembalikan ke player di browser user
+- Player di browser user stream langsung dari CDN
+
+## Video Compression Logic
+
+```
+MAX_ENCODE_DUR = 150s (lebih panjang → stream fallback langsung)
+MAX_BYTES = 8MB (Discord limit)
+targetBitrate(dur, quality) = min(7MB*8/dur - 64kbps_audio, max_quality)
+encodeTimeout(dur) = max(dur * 4, 90) seconds
+```
 
 ## Web Routes
 
@@ -63,11 +82,13 @@ package.json
 |-------|-----------|
 | `/dashboard` | Monitoring dashboard (uptime, stats, aktivitas) |
 | `/api/stats` | JSON stats API untuk dashboard |
+| `/api/bot/status` | Bot status (online/offline, guild count, dll) |
 | `/player` | Web player (HLS + MP4) |
 | `/proxy/m3u8` | M3U8 proxy (FreeReels, dengan auth headers) |
 | `/proxy/seg` | Segment proxy (FreeReels) |
 | `/proxy/direct` | M3U8 proxy (ReelShort, tanpa auth) |
 | `/proxy/dirseg` | Segment proxy (ReelShort) |
+| `/resolve/mb` | Resolve fresh MovieBox CDN URL |
 | `/health` | Health check |
 
 ## Deployment
@@ -76,6 +97,7 @@ package.json
 - Port 5000: web server utama
 - Port 3000: Replit deployment health check (first localPort in `.replit`)
 - Keepalive: `setInterval(() => {}, 30000)` di index.js untuk cegah process exit
+- **JANGAN deploy sebelum semua platform diverifikasi bekerja**
 
 ## Environment Variables
 
@@ -89,5 +111,5 @@ package.json
 - Node.js 20
 - discord.js v14
 - express (port 5000 + 3000)
-- axios
+- axios (tanpa proxy, direct access ke sansekai.my.id)
 - ffmpeg dengan libass (system package)

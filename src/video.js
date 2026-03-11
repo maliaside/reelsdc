@@ -6,315 +6,267 @@ const os = require('os');
 const axios = require('axios');
 
 const execFileAsync = promisify(execFile);
-const MAX_SIZE_BYTES = 8 * 1024 * 1024;
 
-const FREEREELS_HEADERS = {
+// Discord bot limit: 8MB per attachment
+const MAX_BYTES = 8 * 1024 * 1024;
+// Max episode duration for re-encode attempt (longer = too slow on Replit)
+const MAX_ENCODE_DUR = 150; // seconds
+
+const FR_HEADERS = {
     'Referer': 'https://m.mydramawave.com/',
-    'Origin': 'https://m.mydramawave.com',
+    'Origin':  'https://m.mydramawave.com',
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36'
 };
+const FR_FFMPEG_HDR = 'Referer: https://m.mydramawave.com/\r\nOrigin: https://m.mydramawave.com\r\nUser-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36\r\n';
 
-const FREEREELS_FFMPEG_HEADERS = 'Referer: https://m.mydramawave.com/\r\nOrigin: https://m.mydramawave.com\r\nUser-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36\r\n';
+function streamFallback(url, msg) {
+    const e = new Error(msg || 'File terlalu besar untuk Discord.');
+    e.streamFallback = true; e.streamUrl = url;
+    return e;
+}
 
-function calcBitrate(durationSec, quality) {
-    const TARGET_BYTES = 7 * 1024 * 1024;
-    const AUDIO_KBPS = 64;
-    const total = Math.floor((TARGET_BYTES * 8) / 1000 / Math.max(durationSec, 5)) - AUDIO_KBPS;
-    const MIN = quality === '720p' ? 500 : 150;
-    if (total < MIN) return null;
+// Bitrate that fits 7MB for given duration
+function targetBitrate(dur, quality) {
+    const AUDIO = 64;
+    const total = Math.floor((7 * 1024 * 1024 * 8) / 1000 / Math.max(dur, 5)) - AUDIO;
+    const min = quality === '720p' ? 500 : 150;
+    if (total < min) return null;
     return Math.min(total, quality === '720p' ? 1500 : 500);
 }
 
-function makeStreamFallback(url, msg = 'File terlalu besar untuk Discord.') {
-    const err = new Error(msg);
-    err.streamFallback = true;
-    err.streamUrl = url;
-    return err;
+// Encode timeout: 4× video duration, min 90s
+function encodeTimeout(dur) {
+    return Math.max(dur * 4, 90) * 1000;
 }
 
-// ffmpeg timeout: max(dur * 5, 60) seconds — enough for ultrafast encode but not infinite
-function ffmpegTimeout(durationSec) {
-    return Math.min(Math.max(durationSec * 5, 60), 120) * 1000;
+function removeTmp(...files) {
+    for (const f of files) { try { if (f) fs.unlinkSync(f); } catch (_) {} }
 }
 
-// ─── FreeReels ────────────────────────────────────────────────────────────────
+// ─── FreeReels (HLS) ──────────────────────────────────────────────────────────
 
-async function parseFreeReelsMasterM3u8(masterUrl) {
-    const res = await axios.get(masterUrl, { headers: FREEREELS_HEADERS, responseType: 'text' });
+async function parseFrMaster(masterUrl) {
+    const res = await axios.get(masterUrl, { headers: FR_HEADERS, responseType: 'text', timeout: 15000 });
     const lines = res.data.split('\n');
     const base = masterUrl.replace(/\/[^/]+\.m3u8.*$/, '/');
-    let audioUrl = null;
+    let audio = null;
     const streams = [];
     for (let i = 0; i < lines.length; i++) {
-        const line = lines[i].trim();
-        if (line.startsWith('#EXT-X-MEDIA') && line.includes('TYPE=AUDIO')) {
-            const m = line.match(/URI="([^"]+)"/);
-            if (m) audioUrl = m[1].startsWith('http') ? m[1] : base + m[1];
+        const l = lines[i].trim();
+        if (l.startsWith('#EXT-X-MEDIA') && l.includes('TYPE=AUDIO')) {
+            const m = l.match(/URI="([^"]+)"/);
+            if (m) audio = m[1].startsWith('http') ? m[1] : base + m[1];
         }
-        if (line.startsWith('#EXT-X-STREAM-INF')) {
-            const bw = parseInt((line.match(/BANDWIDTH=(\d+)/) || [])[1] || '0');
-            const next = lines[i + 1]?.trim();
-            if (next && !next.startsWith('#')) {
-                streams.push({ bw, url: next.startsWith('http') ? next : base + next });
-            }
+        if (l.startsWith('#EXT-X-STREAM-INF')) {
+            const bw = parseInt((l.match(/BANDWIDTH=(\d+)/) || [])[1] || '0');
+            const nx = lines[i + 1]?.trim();
+            if (nx && !nx.startsWith('#')) streams.push({ bw, url: nx.startsWith('http') ? nx : base + nx });
         }
     }
     streams.sort((a, b) => a.bw - b.bw);
-    return { videoUrl: streams[0]?.url || masterUrl, audioUrl };
+    return { videoUrl: streams[0]?.url || masterUrl, audioUrl: audio };
+}
+
+async function getM3u8Duration(url, headers = {}) {
+    try {
+        const res = await axios.get(url, { headers, responseType: 'text', timeout: 10000 });
+        let t = 0;
+        for (const l of res.data.split('\n')) {
+            if (l.startsWith('#EXTINF:')) t += parseFloat(l.split(':')[1]?.split(',')?.[0] || '0');
+        }
+        return t > 0 ? t : null;
+    } catch { return null; }
 }
 
 async function downloadSubtitle(url) {
     if (!url) return null;
     try {
         const res = await axios.get(url, { responseType: 'text', timeout: 10000 });
-        const p = path.join(os.tmpdir(), `fr_sub_${Date.now()}.srt`);
+        const p = path.join(os.tmpdir(), `sub_${Date.now()}.srt`);
         fs.writeFileSync(p, res.data, 'utf8');
         return p;
     } catch { return null; }
 }
 
-async function getM3u8Duration(m3u8url, headers = {}) {
-    try {
-        const res = await axios.get(m3u8url, { headers, responseType: 'text', timeout: 10000 });
-        let total = 0;
-        for (const line of res.data.split('\n')) {
-            if (line.startsWith('#EXTINF:')) {
-                total += parseFloat(line.split(':')[1]?.split(',')?.[0] || '0');
-            }
-        }
-        return total > 0 ? total : null;
-    } catch { return null; }
-}
+async function downloadFreeReelsEpisode(masterUrl, subtitleUrl = null, durationSec = null, quality = '360p') {
+    const { videoUrl, audioUrl } = await parseFrMaster(masterUrl);
+    const dur = durationSec || await getM3u8Duration(videoUrl, FR_HEADERS) || 120;
 
-async function downloadFreeReelsEpisode(masterM3u8Url, subtitleUrl = null, durationSec = null, quality = '360p') {
-    const { videoUrl, audioUrl } = await parseFreeReelsMasterM3u8(masterM3u8Url);
-    const dur = durationSec || await getM3u8Duration(videoUrl, FREEREELS_HEADERS) || 120;
-    const vidBitrate = calcBitrate(dur, quality);
+    if (dur > MAX_ENCODE_DUR) throw streamFallback(masterUrl, `Episode ${Math.round(dur)}s — terlalu panjang untuk Discord, gunakan streaming browser.`);
 
-    if (!vidBitrate) throw makeStreamFallback(masterM3u8Url, `Episode terlalu panjang untuk kualitas ${quality} di Discord.`);
+    const bps = targetBitrate(dur, quality);
+    if (!bps) throw streamFallback(masterUrl, `Episode terlalu panjang untuk kualitas ${quality} di Discord.`);
 
-    const maxBitrate = Math.floor(vidBitrate * 1.5);
-    const tmpFile = path.join(os.tmpdir(), `fr_${Date.now()}.mp4`);
-    let srtPath = null;
+    const maxBps = Math.floor(bps * 1.5);
+    const out = path.join(os.tmpdir(), `fr_${Date.now()}.mp4`);
+    let srt = null;
 
-    console.log(`[video] FR ${quality} dur=${dur.toFixed(0)}s v=${vidBitrate}k`);
-    srtPath = await downloadSubtitle(subtitleUrl);
-
-    const scaleFilter = quality === '360p' ? 'scale=360:-2,' : '';
+    console.log(`[video] FR ${quality} dur=${Math.round(dur)}s bps=${bps}k`);
+    srt = await downloadSubtitle(subtitleUrl);
 
     let args;
-    if (srtPath) {
-        const esc = srtPath.replace(/\\/g, '/').replace(/:/g, '\\:');
-        const subFilter = `${scaleFilter}subtitles=${esc}:force_style='FontName=Arial,FontSize=13,PrimaryColour=&Hffffff,OutlineColour=&H000000,BackColour=&H80000000,Bold=1,Outline=2,Shadow=1,Alignment=2'`;
-        args = [
-            '-y', '-allowed_extensions', 'ALL', '-headers', FREEREELS_FFMPEG_HEADERS, '-i', videoUrl,
-            ...(audioUrl ? ['-allowed_extensions', 'ALL', '-headers', FREEREELS_FFMPEG_HEADERS, '-i', audioUrl] : []),
-            '-map', '0:v:0', '-map', audioUrl ? '1:a:0' : '0:a:0',
-            '-vf', subFilter,
-            '-c:v', 'libx264', '-preset', 'ultrafast',
-            '-b:v', `${vidBitrate}k`, '-maxrate', `${maxBitrate}k`, '-bufsize', `${maxBitrate * 2}k`,
-            '-c:a', 'aac', '-b:a', '64k',
-            '-movflags', '+faststart', tmpFile
-        ];
+    const scaleF = quality === '360p' ? 'scale=360:-2,' : '';
+    if (srt) {
+        const esc = srt.replace(/\\/g, '/').replace(/:/g, '\\:');
+        const vf = `${scaleF}subtitles=${esc}:force_style='FontName=Arial,FontSize=13,PrimaryColour=&Hffffff,OutlineColour=&H000000,BackColour=&H80000000,Bold=1,Outline=2,Shadow=1,Alignment=2'`;
+        args = ['-y', '-allowed_extensions', 'ALL', '-headers', FR_FFMPEG_HDR, '-i', videoUrl,
+            ...(audioUrl ? ['-allowed_extensions', 'ALL', '-headers', FR_FFMPEG_HDR, '-i', audioUrl] : []),
+            '-map', '0:v:0', '-map', audioUrl ? '1:a:0' : '0:a:0', '-vf', vf,
+            '-c:v', 'libx264', '-preset', 'ultrafast', '-b:v', `${bps}k`, '-maxrate', `${maxBps}k`, '-bufsize', `${maxBps * 2}k`,
+            '-c:a', 'aac', '-b:a', '64k', '-movflags', '+faststart', out];
     } else if (audioUrl) {
-        args = [
-            '-y', '-allowed_extensions', 'ALL', '-headers', FREEREELS_FFMPEG_HEADERS, '-i', videoUrl,
-            '-allowed_extensions', 'ALL', '-headers', FREEREELS_FFMPEG_HEADERS, '-i', audioUrl,
+        args = ['-y', '-allowed_extensions', 'ALL', '-headers', FR_FFMPEG_HDR, '-i', videoUrl,
+            '-allowed_extensions', 'ALL', '-headers', FR_FFMPEG_HDR, '-i', audioUrl,
             '-map', '0:v:0', '-map', '1:a:0',
             ...(quality === '360p' ? ['-vf', 'scale=360:-2'] : []),
-            '-c:v', 'libx264', '-preset', 'ultrafast',
-            '-b:v', `${vidBitrate}k`, '-maxrate', `${maxBitrate}k`, '-bufsize', `${maxBitrate * 2}k`,
-            '-c:a', 'aac', '-b:a', '64k',
-            '-movflags', '+faststart', tmpFile
-        ];
+            '-c:v', 'libx264', '-preset', 'ultrafast', '-b:v', `${bps}k`, '-maxrate', `${maxBps}k`, '-bufsize', `${maxBps * 2}k`,
+            '-c:a', 'aac', '-b:a', '64k', '-movflags', '+faststart', out];
     } else {
-        args = [
-            '-y', '-allowed_extensions', 'ALL', '-headers', FREEREELS_FFMPEG_HEADERS, '-i', videoUrl,
+        args = ['-y', '-allowed_extensions', 'ALL', '-headers', FR_FFMPEG_HDR, '-i', videoUrl,
             ...(quality === '360p' ? ['-vf', 'scale=360:-2'] : []),
-            '-c:v', 'libx264', '-preset', 'ultrafast',
-            '-b:v', `${vidBitrate}k`, '-maxrate', `${maxBitrate}k`, '-bufsize', `${maxBitrate * 2}k`,
-            '-c:a', 'aac', '-b:a', '64k',
-            '-movflags', '+faststart', tmpFile
-        ];
+            '-c:v', 'libx264', '-preset', 'ultrafast', '-b:v', `${bps}k`, '-maxrate', `${maxBps}k`, '-bufsize', `${maxBps * 2}k`,
+            '-c:a', 'aac', '-b:a', '64k', '-movflags', '+faststart', out];
     }
 
     try {
-        await execFileAsync('ffmpeg', args, { timeout: ffmpegTimeout(dur) });
+        await execFileAsync('ffmpeg', args, { timeout: encodeTimeout(dur) });
     } catch (err) {
-        try { fs.unlinkSync(tmpFile); } catch (_) {}
-        if (srtPath) try { fs.unlinkSync(srtPath); } catch (_) {}
-        console.error('[video] FR ffmpeg error:', err.message?.slice(0, 80));
-        throw makeStreamFallback(masterM3u8Url, 'Gagal encode video. Coba streaming di browser.');
+        removeTmp(out, srt);
+        console.error('[video] FR ffmpeg:', err.message?.slice(0, 120));
+        throw streamFallback(masterUrl, 'Gagal encode. Coba streaming di browser.');
     } finally {
-        if (srtPath) try { fs.unlinkSync(srtPath); } catch (_) {}
+        removeTmp(srt);
     }
 
-    const stat = fs.statSync(tmpFile);
-    if (stat.size > MAX_SIZE_BYTES) {
-        fs.unlinkSync(tmpFile);
-        throw makeStreamFallback(masterM3u8Url, `File terlalu besar (${Math.round(stat.size / 1024 / 1024)}MB) untuk Discord.`);
-    }
-    return { filePath: tmpFile, sizeBytes: stat.size };
+    const size = fs.statSync(out).size;
+    if (size > MAX_BYTES) { removeTmp(out); throw streamFallback(masterUrl, `File ${Math.round(size/1024/1024)}MB > 8MB.`); }
+    return { filePath: out, sizeBytes: size };
 }
 
-// ─── ReelShort ────────────────────────────────────────────────────────────────
+// ─── ReelShort (HLS) ─────────────────────────────────────────────────────────
 
 async function downloadReelShortEpisode(m3u8Url, quality = '360p') {
     const dur = await getM3u8Duration(m3u8Url) || 120;
-    const vidBitrate = calcBitrate(dur, quality);
-    const tmpFile = path.join(os.tmpdir(), `rs_${Date.now()}.mp4`);
 
-    console.log(`[video] RS ${quality} dur=${dur.toFixed(0)}s v=${vidBitrate || 'STREAM'}k`);
+    if (dur > MAX_ENCODE_DUR) throw streamFallback(m3u8Url, `Episode ${Math.round(dur)}s — terlalu panjang untuk Discord, gunakan streaming browser.`);
 
-    if (!vidBitrate) throw makeStreamFallback(m3u8Url, `Episode terlalu panjang untuk kualitas ${quality} di Discord.`);
+    const bps = targetBitrate(dur, quality);
+    if (!bps) throw streamFallback(m3u8Url, `Episode terlalu panjang untuk kualitas ${quality} di Discord.`);
 
-    const maxBitrate = Math.floor(vidBitrate * 1.5);
+    const maxBps = Math.floor(bps * 1.5);
+    const out = path.join(os.tmpdir(), `rs_${Date.now()}.mp4`);
 
-    const args = [
-        '-y', '-allowed_extensions', 'ALL', '-i', m3u8Url,
+    console.log(`[video] RS ${quality} dur=${Math.round(dur)}s bps=${bps}k`);
+
+    const args = ['-y', '-allowed_extensions', 'ALL', '-i', m3u8Url,
         ...(quality === '360p' ? ['-vf', 'scale=360:-2'] : []),
-        '-c:v', 'libx264', '-preset', 'ultrafast',
-        '-b:v', `${vidBitrate}k`, '-maxrate', `${maxBitrate}k`, '-bufsize', `${maxBitrate * 2}k`,
-        '-c:a', 'aac', '-b:a', '64k',
-        '-movflags', '+faststart', tmpFile
-    ];
+        '-c:v', 'libx264', '-preset', 'ultrafast', '-b:v', `${bps}k`, '-maxrate', `${maxBps}k`, '-bufsize', `${maxBps * 2}k`,
+        '-c:a', 'aac', '-b:a', '64k', '-movflags', '+faststart', out];
 
     try {
-        await execFileAsync('ffmpeg', args, { timeout: ffmpegTimeout(dur) });
+        await execFileAsync('ffmpeg', args, { timeout: encodeTimeout(dur) });
     } catch (err) {
-        try { fs.unlinkSync(tmpFile); } catch (_) {}
-        console.error('[video] RS ffmpeg error:', err.message?.slice(0, 80));
-        throw makeStreamFallback(m3u8Url, 'Gagal encode video. Coba streaming di browser.');
+        removeTmp(out);
+        console.error('[video] RS ffmpeg:', err.message?.slice(0, 120));
+        throw streamFallback(m3u8Url, 'Gagal encode. Coba streaming di browser.');
     }
 
-    const stat = fs.statSync(tmpFile);
-    if (stat.size > MAX_SIZE_BYTES) {
-        fs.unlinkSync(tmpFile);
-        throw makeStreamFallback(m3u8Url, `File terlalu besar (${Math.round(stat.size / 1024 / 1024)}MB) untuk Discord.`);
-    }
-    return { filePath: tmpFile, sizeBytes: stat.size };
+    const size = fs.statSync(out).size;
+    if (size > MAX_BYTES) { removeTmp(out); throw streamFallback(m3u8Url, `File ${Math.round(size/1024/1024)}MB > 8MB.`); }
+    return { filePath: out, sizeBytes: size };
 }
 
-// ─── Melolo ───────────────────────────────────────────────────────────────────
+// ─── Melolo (direct MP4 from TikTok CDN) ─────────────────────────────────────
 
-// Download file ke disk dengan timeout ketat + batas ukuran
-// Jika lambat/gagal → throw streamFallback
-async function downloadToFile(url, destPath, maxBytes, timeoutMs, streamFallbackUrl) {
+async function downloadSource(url, destPath, maxBytes, timeoutMs) {
     return new Promise((resolve, reject) => {
-        const timer = setTimeout(() => {
-            try { fs.unlinkSync(destPath); } catch (_) {}
-            reject(makeStreamFallback(streamFallbackUrl, 'Download terlalu lambat. Coba streaming di browser.'));
+        const kill = setTimeout(() => {
+            removeTmp(destPath);
+            reject(new Error('download_timeout'));
         }, timeoutMs);
 
         axios.get(url, {
             responseType: 'stream',
-            timeout: timeoutMs,
+            timeout: timeoutMs + 5000,
             headers: {
                 'User-Agent': 'Mozilla/5.0 (Linux; Android 13; SM-G991B) AppleWebKit/537.36 Chrome/120.0.6099.230 Mobile Safari/537.36',
-                'Range': `bytes=0-${maxBytes - 1}`,
             }
         }).then(res => {
             const writer = fs.createWriteStream(destPath);
             let bytes = 0;
-
             res.data.on('data', chunk => {
                 bytes += chunk.length;
                 if (bytes > maxBytes) {
-                    clearTimeout(timer);
-                    res.data.destroy();
-                    writer.destroy();
-                    try { fs.unlinkSync(destPath); } catch (_) {}
-                    reject(makeStreamFallback(streamFallbackUrl, 'File sumber terlalu besar untuk Discord.'));
+                    clearTimeout(kill); res.data.destroy(); writer.destroy(); removeTmp(destPath);
+                    reject(new Error('source_too_large'));
                 }
             });
-
             res.data.pipe(writer);
-
-            writer.on('finish', () => {
-                clearTimeout(timer);
-                resolve(bytes);
-            });
-            writer.on('error', err => {
-                clearTimeout(timer);
-                try { fs.unlinkSync(destPath); } catch (_) {}
-                reject(makeStreamFallback(streamFallbackUrl, 'Gagal download: ' + err.message));
-            });
-            res.data.on('error', err => {
-                clearTimeout(timer);
-                try { fs.unlinkSync(destPath); } catch (_) {}
-                reject(makeStreamFallback(streamFallbackUrl, 'Gagal download stream: ' + err.message));
-            });
-        }).catch(err => {
-            clearTimeout(timer);
-            try { fs.unlinkSync(destPath); } catch (_) {}
-            reject(makeStreamFallback(streamFallbackUrl, 'Gagal koneksi download: ' + (err.message?.slice(0, 60) || 'unknown')));
-        });
+            writer.on('finish', () => { clearTimeout(kill); resolve(bytes); });
+            writer.on('error', e => { clearTimeout(kill); removeTmp(destPath); reject(e); });
+            res.data.on('error', e => { clearTimeout(kill); removeTmp(destPath); reject(e); });
+        }).catch(e => { clearTimeout(kill); removeTmp(destPath); reject(e); });
     });
 }
 
 async function downloadMeloloEpisode(mp4Url, durationSec = null, quality = '360p') {
     const dur = durationSec || 120;
-    const vidBitrate = calcBitrate(dur, quality);
-    const srcFile = path.join(os.tmpdir(), `ml_src_${Date.now()}.mp4`);
-    const outFile = path.join(os.tmpdir(), `ml_out_${Date.now()}.mp4`);
+    const src = path.join(os.tmpdir(), `ml_src_${Date.now()}.mp4`);
+    const out = path.join(os.tmpdir(), `ml_out_${Date.now()}.mp4`);
 
-    console.log(`[video] ML ${quality} dur=${dur.toFixed(0)}s v=${vidBitrate || 'STREAM'}k`);
+    console.log(`[video] ML ${quality} dur=${Math.round(dur)}s`);
 
-    if (!vidBitrate) throw makeStreamFallback(mp4Url, `Episode terlalu panjang untuk kualitas ${quality} di Discord.`);
-
-    // Estimasi ukuran sumber: asumsi 2Mbps = 250KB/s → dur * 300KB, max 40MB
-    const estSourceBytes = Math.min(dur * 300 * 1024, 40 * 1024 * 1024);
-    // Timeout download: max(dur * 2, 30) detik — cukup untuk koneksi wajar
-    const dlTimeout = Math.max(dur * 2, 30) * 1000;
-
-    console.log(`[video] ML downloading src (timeout=${Math.round(dlTimeout/1000)}s)...`);
-
-    // Step 1: Download file sumber ke disk
+    // Download source — limit 30MB, timeout = max(dur*2.5, 60)s
+    const dlTimeout = Math.max(dur * 2.5, 60) * 1000;
+    let srcBytes;
     try {
-        const bytes = await downloadToFile(mp4Url, srcFile, estSourceBytes, dlTimeout, mp4Url);
-        console.log(`[video] ML src downloaded: ${Math.round(bytes/1024)}KB`);
-    } catch (err) {
-        console.warn('[video] ML download failed:', err.message?.slice(0, 80));
-        throw err; // already a streamFallback error
+        srcBytes = await downloadSource(mp4Url, src, 30 * 1024 * 1024, dlTimeout);
+        console.log(`[video] ML src downloaded ${Math.round(srcBytes / 1024)}KB`);
+    } catch (e) {
+        console.warn('[video] ML download failed:', e.message);
+        throw streamFallback(mp4Url, e.message === 'source_too_large'
+            ? 'Video terlalu besar (>30MB). Gunakan streaming browser.'
+            : 'Download gagal/lambat. Coba streaming di browser.');
     }
 
-    // Step 2: ffmpeg dari file lokal (cepat, tanpa network I/O)
-    const maxBitrate = Math.floor(vidBitrate * 1.5);
-    const args = [
-        '-y', '-threads', '2', '-i', srcFile,
+    // Source already fits Discord → send directly (original quality, no encode!)
+    if (srcBytes < MAX_BYTES) {
+        console.log(`[video] ML src fits Discord (${Math.round(srcBytes/1024)}KB) — kirim langsung`);
+        return { filePath: src, sizeBytes: srcBytes };
+    }
+
+    // Needs re-encoding — check if duration is short enough
+    if (dur > MAX_ENCODE_DUR) {
+        removeTmp(src);
+        throw streamFallback(mp4Url, `Episode ${Math.round(dur)}s terlalu panjang untuk dikompresi. Gunakan streaming browser.`);
+    }
+
+    const bps = targetBitrate(dur, quality);
+    if (!bps) { removeTmp(src); throw streamFallback(mp4Url, `Episode terlalu panjang untuk kualitas ${quality} di Discord.`); }
+
+    const maxBps = Math.floor(bps * 1.5);
+    const args = ['-y', '-threads', '2', '-i', src,
         ...(quality === '360p' ? ['-vf', 'scale=360:-2'] : []),
         '-c:v', 'libx264', '-preset', 'ultrafast',
-        '-b:v', `${vidBitrate}k`, '-maxrate', `${maxBitrate}k`, '-bufsize', `${maxBitrate * 2}k`,
-        '-c:a', 'aac', '-b:a', '64k',
-        '-movflags', '+faststart', outFile
-    ];
+        '-b:v', `${bps}k`, '-maxrate', `${maxBps}k`, '-bufsize', `${maxBps * 2}k`,
+        '-c:a', 'aac', '-b:a', '64k', '-movflags', '+faststart', out];
 
+    console.log(`[video] ML re-encoding bps=${bps}k`);
     try {
-        await execFileAsync('ffmpeg', args, { timeout: ffmpegTimeout(dur) });
+        await execFileAsync('ffmpeg', args, { timeout: encodeTimeout(dur) });
     } catch (err) {
-        try { fs.unlinkSync(srcFile); } catch (_) {}
-        try { fs.unlinkSync(outFile); } catch (_) {}
-        console.error('[video] ML ffmpeg error:', err.message?.slice(0, 80));
-        throw makeStreamFallback(mp4Url, 'Gagal encode video. Coba streaming di browser.');
+        removeTmp(src, out);
+        console.error('[video] ML ffmpeg:', err.message?.slice(0, 120));
+        throw streamFallback(mp4Url, 'Gagal encode. Coba streaming di browser.');
     } finally {
-        try { fs.unlinkSync(srcFile); } catch (_) {}
+        removeTmp(src);
     }
 
-    const stat = fs.statSync(outFile);
-    if (stat.size > MAX_SIZE_BYTES) {
-        fs.unlinkSync(outFile);
-        throw makeStreamFallback(mp4Url, `File terlalu besar (${Math.round(stat.size / 1024 / 1024)}MB) untuk Discord.`);
-    }
-    return { filePath: outFile, sizeBytes: stat.size };
+    const size = fs.statSync(out).size;
+    if (size > MAX_BYTES) { removeTmp(out); throw streamFallback(mp4Url, `File ${Math.round(size/1024/1024)}MB > 8MB.`); }
+    return { filePath: out, sizeBytes: size };
 }
 
-function cleanup(filePath) {
-    try { fs.unlinkSync(filePath); } catch (_) {}
-}
+function cleanup(filePath) { removeTmp(filePath); }
 
-module.exports = {
-    downloadFreeReelsEpisode,
-    downloadReelShortEpisode,
-    downloadMeloloEpisode,
-    cleanup
-};
+module.exports = { downloadFreeReelsEpisode, downloadReelShortEpisode, downloadMeloloEpisode, cleanup };
