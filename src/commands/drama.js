@@ -801,7 +801,7 @@ module.exports = {
                 // Melolo
                 try {
                     const mlData = await mlApi.search(judul);
-                    const mlItems = mlApi.parseSearch(mlData);
+                    const mlItems = mlApi.parseSearchItems(mlData);
                     for (const item of mlItems) {
                         const k = `ml_${item.bookId || item.id}`;
                         if (!seen.has(k)) { seen.add(k); allItems.push({ _source: 'melolo', key: item.bookId || item.id, title: item.title || '', cover: item.cover || null, desc: item.description || item.desc || '', tags: [], episodes: item.episodeCount || null }); }
@@ -854,8 +854,8 @@ module.exports = {
 
             if (sub === 'melolo') {
                 await interaction.editReply({ content: '⏳ Memuat drama Melolo...' });
-                const data = await mlApi.getForyou();
-                const mlParsed = mlApi.parseForyou ? mlApi.parseForyou(data) : (data?.data?.list || data?.list || []);
+                const data = await mlApi.getForYou();
+                const mlParsed = mlApi.parseForYouItems(data);
                 const items = mlParsed.map(i => ({
                     _source: 'melolo',
                     key: i.bookId || i.id || i.book_id || '',
