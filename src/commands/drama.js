@@ -787,23 +787,77 @@ module.exports = {
                 }
                 matched.sort((a, b) => titleScore(b) - titleScore(a));
 
-                // Pisah dua rak: Drama & Reels vs MovieBox
+                // Pisah dua rak
                 const dramaItems = matched.filter(i => i._source !== 'moviebox');
                 const mbItems    = matched.filter(i => i._source === 'moviebox');
+                const cid = `cari_${interaction.id}`;
 
-                const parts = [];
-                if (dramaItems.length) parts.push(`**${dramaItems.length} Drama & Reels**`);
-                if (mbItems.length)    parts.push(`**${mbItems.length} Film MovieBox**`);
-
-                await interaction.editReply({ content: `🔍 <@${userId}> — Hasil pencarian **"${judul}"**: ${parts.join(' + ')} ↓` });
-
-                // Dua rak terpisah, keduanya muncul sebagai pesan followUp
-                if (dramaItems.length > 0) {
-                    await showList(interaction, dramaItems, `📺 Drama & Reels — "${judul}"`, userId, true);
+                // Kalau hanya satu kategori, langsung tampilkan listnya
+                if (!dramaItems.length || !mbItems.length) {
+                    const items = dramaItems.length ? dramaItems : mbItems;
+                    const label = dramaItems.length ? `📺 Reels/Dracin — "${judul}"` : `🎬 Movie/Serial Drama — "${judul}"`;
+                    await interaction.editReply({ content: `🔍 <@${userId}> Ketemu **${items.length} hasil** untuk **"${judul}"** ↓` });
+                    await showList(interaction, items, label, userId, true);
+                    trackCommand({ user: interaction.user.username, action: 'cari', title: judul, result: 'ok' });
+                    return;
                 }
-                if (mbItems.length > 0) {
-                    await showList(interaction, mbItems, `🎬 MovieBox — "${judul}"`, userId, true);
-                }
+
+                // Dua kategori — tampilkan tombol pilihan
+                const rackRow = new ActionRowBuilder().addComponents(
+                    new ButtonBuilder().setCustomId(`${cid}_rack_drama`).setLabel(`📺 Reels/Dracin (${dramaItems.length})`).setStyle(ButtonStyle.Primary),
+                    new ButtonBuilder().setCustomId(`${cid}_rack_mb`).setLabel(`🎬 Movie/Serial Drama (${mbItems.length})`).setStyle(ButtonStyle.Success)
+                );
+                const headerEmbed = new EmbedBuilder()
+                    .setColor(0x5865F2)
+                    .setTitle(`🔍 Hasil: "${judul.slice(0, 100)}"`)
+                    .setDescription(`Pilih kategori yang ingin dilihat:\n\n📺 **Reels/Dracin** — ${dramaItems.length} hasil (FreeReels, ReelShort, Melolo)\n🎬 **Movie/Serial Drama** — ${mbItems.length} hasil (MovieBox)`)
+                    .setFooter({ text: 'Hanya kamu yang bisa memilih' });
+
+                await interaction.editReply({ embeds: [headerEmbed], components: [rackRow] });
+                const msg = await interaction.fetchReply();
+
+                let currentItems = null;
+                let currentIdx   = 0;
+                let currentTitle = '';
+
+                const col = msg.createMessageComponentCollector({ time: 300_000 });
+                col.on('collect', async btn => {
+                    try {
+                        if (btn.user.id !== userId) return btn.reply({ content: '⛔ Bukan giliranmu.', flags: 64 });
+
+                        if (btn.customId === `${cid}_rack_drama`) {
+                            currentItems = dramaItems;
+                            currentTitle = `📺 Reels/Dracin — "${judul}"`;
+                            currentIdx = 0;
+                        } else if (btn.customId === `${cid}_rack_mb`) {
+                            currentItems = mbItems;
+                            currentTitle = `🎬 Movie/Serial Drama — "${judul}"`;
+                            currentIdx = 0;
+                        } else if (btn.customId.includes('_next_') && currentItems) {
+                            currentIdx = Math.min(currentIdx + 1, currentItems.length - 1);
+                        } else if (btn.customId.includes('_prev_') && currentItems) {
+                            currentIdx = Math.max(currentIdx - 1, 0);
+                        } else if (btn.customId.includes('_det_')) {
+                            const parts2 = btn.customId.split('_det_')[1].split('_');
+                            const plt = parts2[0];
+                            const key = parts2.slice(1).join('_');
+                            if (plt === 'freereels') return showFrDetail(btn, key, userId);
+                            if (plt === 'reelshort') return showRsDetail(btn, key, userId);
+                            if (plt === 'melolo')    return showMlDetail(btn, key, userId);
+                            if (plt === 'moviebox')  return showMbDetail(btn, key, userId);
+                            return;
+                        } else return;
+
+                        const item = currentItems[currentIdx];
+                        await btn.update({
+                            embeds:     [buildListEmbed(item, currentIdx, currentItems.length, currentTitle)],
+                            components: [buildNavRow(cid, currentIdx, currentItems.length, item)],
+                        });
+                    } catch (err) {
+                        console.error('[cari/collect]', err.message);
+                    }
+                });
+                col.on('end', () => msg.edit({ components: [] }).catch(() => {}));
 
                 trackCommand({ user: interaction.user.username, action: 'cari', title: judul, result: 'ok' });
 
