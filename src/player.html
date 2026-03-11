@@ -109,20 +109,28 @@ if (plat === 'moviebox') {
       badge.textContent = `MovieBox · ${ready.quality}p`;
 
       // Set src + play WITHIN gesture context → no autoplay block on mobile
-      vid.setAttribute('referrerpolicy', 'no-referrer');
       vid.src = ready.url;
       const p = vid.play();
       if (p) p.catch(() => { vid.load(); vid.play().catch(()=>{}); });
 
       let retried = false;
       vid.addEventListener('error', () => {
-        if (retried) { setError('Gagal putar video. Kembali ke Discord dan pilih episode lagi.'); return; }
+        const code = vid.error ? vid.error.code : '?';
+        const codes = {1:'aborted',2:'network',3:'decode',4:'format'};
+        const codeStr = codes[code] || code;
+        if (retried) {
+          setError(`Gagal putar video (err:${codeStr}). Coba buka link ini langsung:`);
+          errmsg.innerHTML = `Error ${codeStr}. <a href="${ready.url}" target="_blank" style="color:#4af">Buka URL video</a> — jika terbuka, ini masalah player.`;
+          return;
+        }
         retried = true;
-        // Re-fetch fresh URL and retry
+        badge.textContent = `MovieBox · ${ready.quality}p (retrying err:${codeStr}...)`;
+        // Re-fetch URL and retry with different quality
         fetch('/resolve/mb?' + q + '&_r=' + Date.now())
           .then(r => r.json())
           .then(d2 => {
-            if (d2.error || d2.url === ready.url) { setError('Link kedaluwarsa. Kembali ke Discord dan pilih ulang episode.'); return; }
+            if (d2.error) { setError('Gagal ambil link: ' + d2.error); return; }
+            if (d2.url === ready.url) { setError(`Link kedaluwarsa (err:${codeStr}). Kembali ke Discord dan pilih ulang episode.`); return; }
             vid.src = d2.url;
             vid.play().catch(()=>{});
             badge.textContent = `MovieBox · ${d2.quality}p (retry)`;

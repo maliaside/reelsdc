@@ -253,17 +253,12 @@ function getMeloloPlayerUrl(mp4url, title, ep) {
 }
 
 // Player resolves fresh CDN URL at load time via /resolve/mb
+// Returns h5.aoneroom.com URL directly — CDN serves video correctly from that domain.
+// Our player page can't set Referer: https://h5.aoneroom.com which the CDN requires.
 function getMbPlayerUrl(subjectId, quality, title, season, episode) {
-    const base = getBaseUrl();
-    const params = new URLSearchParams({
-        platform: 'moviebox',
-        subjectId: String(subjectId),
-        quality: String(quality || 360),
-        title: title || '',
-    });
-    if (season != null) params.set('season', String(season));
-    if (episode != null) params.set('episode', String(episode));
-    return `${base}/player?${params.toString()}`;
+    let url = `https://h5.aoneroom.com/${subjectId}`;
+    if (season != null && episode != null) url += `?season=${season}&ep=${episode}`;
+    return url;
 }
 
 module.exports = { startWebServer, setBotClient, getPlayerUrl, getDirectPlayerUrl, getMeloloPlayerUrl, getMbPlayerUrl };

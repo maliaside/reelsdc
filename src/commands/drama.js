@@ -488,30 +488,27 @@ async function showMbDetail(interaction, subjectId, userId) {
         if (fields.length) embed.addFields(fields);
 
         // ── Helpers ──────────────────────────────────────────────────────────────
-        function buildQualityRow() {
+        function buildWatchRow() {
             return new ActionRowBuilder().addComponents(
-                new ButtonBuilder().setCustomId('mbq_360').setLabel('📱 360p').setStyle(ButtonStyle.Secondary),
-                new ButtonBuilder().setCustomId('mbq_480').setLabel('📺 480p').setStyle(ButtonStyle.Primary),
-                new ButtonBuilder().setCustomId('mbq_1080').setLabel('🖥️ 1080p').setStyle(ButtonStyle.Success),
+                new ButtonBuilder().setCustomId('mbq_watch').setLabel('▶ Tonton Sekarang').setStyle(ButtonStyle.Success),
             );
         }
 
         async function streamEpisode(q, season, epNum) {
-            const targetQ = parseInt(q.customId.replace('mbq_', ''));
-            const playerUrl = getMbPlayerUrl(subjectId, targetQ, title, season, epNum);
+            const playerUrl = getMbPlayerUrl(subjectId, null, title, season, epNum);
             const epLine = isSeries && season != null ? `\n📺 Season ${season} · Episode ${epNum}` : '';
             const resEmbed = new EmbedBuilder()
                 .setColor(COLORS.moviebox)
                 .setTitle(`🔗 ${title.slice(0, 200)}`)
-                .setDescription(`**[▶ Tonton di browser](${playerUrl})**${epLine}\nKualitas: **${targetQ}p** · Streaming langsung di browser.`)
-                .setFooter({ text: 'MovieBox · Streaming · Hanya kamu yang bisa lihat ini' });
+                .setDescription(`**[▶ Tonton di MovieBox](${playerUrl})**${epLine}\nDibuka di MovieBox Web Player.`)
+                .setFooter({ text: 'MovieBox · Hanya kamu yang bisa lihat ini' });
             await q.editReply({ content: null, embeds: [resEmbed], components: [] });
-            trackCommand({ platform: 'moviebox', user: q.user?.username || 'unknown', action: isSeries ? `S${season}E${epNum} ${targetQ}p` : `Tonton ${targetQ}p`, title, result: 'stream' });
+            trackCommand({ platform: 'moviebox', user: q.user?.username || 'unknown', action: isSeries ? `S${season}E${epNum}` : 'Tonton', title, result: 'stream' });
         }
 
         // ── Movie flow ────────────────────────────────────────────────────────────
         if (!isSeries) {
-            await interaction.editReply({ embeds: [embed], components: [buildQualityRow()] });
+            await interaction.editReply({ embeds: [embed], components: [buildWatchRow()] });
             const msg = await interaction.fetchReply();
             const qcol = msg.createMessageComponentCollector({ time: 120_000 });
             qcol.on('collect', async q => {
@@ -520,7 +517,7 @@ async function showMbDetail(interaction, subjectId, userId) {
                     await q.deferUpdate();
                     await streamEpisode(q, null, null);
                 } catch (err) {
-                    console.error('[mb/quality]', err.message);
+                    console.error('[mb/watch]', err.message);
                     await q.editReply({ content: `❌ Gagal: ${err.message}`, embeds: [], components: [] }).catch(() => {});
                 }
             });
@@ -600,23 +597,8 @@ async function showMbDetail(interaction, subjectId, userId) {
                 } else if (btn.customId === 'mbep') {
                     const epNum = parseInt(btn.values[0]);
                     col.stop('epSelected');
-                    await btn.editReply({
-                        content: `📺 **${title}** · Season ${currentSe} · Episode ${epNum} — pilih kualitas:`,
-                        embeds: [], components: [buildQualityRow()]
-                    });
-                    const qMsg = await interaction.fetchReply();
-                    const qcol = qMsg.createMessageComponentCollector({ time: 60_000, max: 1 });
-                    qcol.on('collect', async q => {
-                        try {
-                            if (q.user.id !== userId) return q.reply({ content: '⛔ Bukan giliranmu.', flags: 64 });
-                            await q.deferUpdate();
-                            await streamEpisode(q, currentSe, epNum);
-                        } catch (err) {
-                            console.error('[mb/quality]', err.message);
-                            await q.editReply({ content: `❌ Gagal: ${err.message}`, embeds: [], components: [] }).catch(() => {});
-                        }
-                    });
-                    qcol.on('end', () => interaction.editReply({ components: [] }).catch(() => {}));
+                    await btn.deferUpdate();
+                    await streamEpisode(btn, currentSe, epNum);
                 }
             } catch (err) {
                 console.error('[mb/series]', err.message);

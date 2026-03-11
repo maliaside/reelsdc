@@ -27,14 +27,36 @@ async function getEpisodeSources(subjectId, season, episode) {
     return res.data;
 }
 
-// Simple wrapper — just fetch and return.
-// No "freshness" check: CDN URLs (bcdnxw.hakunaymatata.com) stay valid for hours.
-// The "try variant" logic triggered extra 429 rate limits with no benefit.
+// Fetch sources, trying an alternate quality if the first URL is stale (> 25 min).
+// Sansekai caches per quality so quality=720 and quality=360 have separate cache entries.
+// CDN signed URLs appear to have ~30-60 min TTL, so we need reasonably fresh ones.
 async function getEpisodeSourcesBest(subjectId, season, episode) {
     const data = await getEpisodeSources(subjectId, season, episode);
     const sources = parseSources(data);
     if (!sources.length) throw new Error('Episode ini tidak tersedia atau terkunci.');
-    return data;
+
+    const now = Math.floor(Date.now() / 1000);
+    const age = urlAge(sources[0].url, now);
+
+    // If URL < 25 minutes old, return immediately
+    if (age < 1500) return data;
+
+    // Stale — try quality=720 as a different sansekai cache entry (often fresher)
+    console.log(`[moviebox] URL ${age}s old, trying quality=720 cache entry...`);
+    try {
+        const res2 = await client.get(`${BASE}/sources`, {
+            params: { subjectId, season, episode, quality: 720 }
+        });
+        const src2 = parseSources(res2.data);
+        if (src2.length) {
+            const age2 = urlAge(src2[0].url, now);
+            console.log(`[moviebox] quality=720 URL age: ${age2}s (original: ${age}s)`);
+            if (age2 < age) return res2.data; // use fresher one
+        }
+    } catch (e) {
+        console.warn('[moviebox] quality=720 attempt failed:', e.message);
+    }
+    return data; // return whatever we have
 }
 
 function urlAge(url, now) {
