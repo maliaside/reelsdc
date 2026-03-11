@@ -803,8 +803,8 @@ module.exports = {
                     const mlData = await mlApi.search(judul);
                     const mlItems = mlApi.parseSearchItems(mlData);
                     for (const item of mlItems) {
-                        const k = `ml_${item.bookId || item.id}`;
-                        if (!seen.has(k)) { seen.add(k); allItems.push({ _source: 'melolo', key: item.bookId || item.id, title: item.title || '', cover: item.cover || null, desc: item.description || item.desc || '', tags: [], episodes: item.episodeCount || null }); }
+                        const k = `ml_${item.key}`;
+                        if (!seen.has(k)) { seen.add(k); allItems.push(item); }
                     }
                 } catch (e) { console.warn('[drama/cari] ML:', e.message); }
 
@@ -855,16 +855,7 @@ module.exports = {
             if (sub === 'melolo') {
                 await interaction.editReply({ content: '⏳ Memuat drama Melolo...' });
                 const data = await mlApi.getForYou();
-                const mlParsed = mlApi.parseForYouItems(data);
-                const items = mlParsed.map(i => ({
-                    _source: 'melolo',
-                    key: i.bookId || i.id || i.book_id || '',
-                    title: i.title || i.name || '',
-                    cover: i.cover || i.book_pic || null,
-                    desc: i.description || i.desc || '',
-                    tags: [],
-                    episodes: i.episodeCount || i.episode_count || null,
-                })).filter(i => i.key);
+                const items = mlApi.parseForYouItems(data);
                 if (items.length === 0) return interaction.editReply({ content: '❌ Tidak ada drama ditemukan.' });
                 return showList(interaction, items, '🎥 Melolo · For You', userId);
             }
