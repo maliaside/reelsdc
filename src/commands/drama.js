@@ -92,7 +92,7 @@ function buildEpisodeSelect(episodes, page, selectId, navId) {
 
     slice.forEach((ep, i) => {
         select.addOptions(new StringSelectMenuOptionBuilder()
-            .setLabel((ep.label || `Episode ${start + i + 1}`).slice(0, 100))
+            .setLabel((ep.label || `EPISODE ${start + i + 1}`).slice(0, 100))
             .setDescription((ep.locked ? '🔒 Terkunci' : 'Klik untuk pilih kualitas & tonton').slice(0, 100))
             .setValue(String(start + i)));
     });
@@ -116,7 +116,6 @@ function buildQualityRow(qCustomId) {
 }
 
 async function showQualityPicker(c, userId, epLabel, callback) {
-    // c is already deferred (deferReply flags:64). Show quality buttons.
     const qCustomId = `q_${c.id}_${Date.now()}`;
     await c.editReply({
         content: `🎬 **${epLabel}**\n\nPilih kualitas video:`,
@@ -132,6 +131,7 @@ async function showQualityPicker(c, userId, epLabel, callback) {
             await q.update({ content: '⏳ Memproses...', components: [] });
             await callback(q, quality);
         } catch (err) {
+            if (err.code === 10062 || err.code === 40060) return;
             console.error('[qualityCollect]', err.message);
             await c.editReply({ content: `❌ Terjadi kesalahan: ${err.message}`, components: [] }).catch(() => {});
         }
@@ -143,9 +143,48 @@ async function showQualityPicker(c, userId, epLabel, callback) {
     });
 }
 
+// ─── Next episode button helper ───────────────────────────────────────────────
+
+function buildNextEpRow(btnId, nextEpNum) {
+    return new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+            .setCustomId(btnId)
+            .setLabel(`▶  EPISODE ${nextEpNum} Selanjutnya`)
+            .setStyle(ButtonStyle.Success)
+    );
+}
+
+async function attachNextEpBtn(interaction, nextEpNum, userId, onNext) {
+    const btnId = `nxep_${nextEpNum}_${Date.now()}`;
+    try {
+        await interaction.editReply({ components: [buildNextEpRow(btnId, nextEpNum)] });
+        const msg = await interaction.fetchReply();
+        const col = msg.createMessageComponentCollector({
+            filter: i => i.customId === btnId,
+            time: 180_000, max: 1
+        });
+        col.on('collect', async btn => {
+            try {
+                if (btn.user.id !== userId) return btn.reply({ content: '⛔ Bukan giliran kamu.', flags: 64 });
+                await btn.deferUpdate();
+                await onNext(btn);
+            } catch (err) {
+                if (err.code === 10062 || err.code === 40060) return;
+                console.error('[nextEpBtn]', err.message);
+            }
+        });
+        col.on('end', (col2, reason) => {
+            if (reason === 'time') interaction.editReply({ components: [] }).catch(() => {});
+        });
+    } catch (err) {
+        if (err.code === 10062 || err.code === 40060) return;
+        console.error('[attachNextEpBtn]', err.message);
+    }
+}
+
 // ─── Stream link sender ───────────────────────────────────────────────────────
 
-async function sendStreamLink(q, streamUrl, title, epNum, platform) {
+async function sendStreamLink(q, streamUrl, title, epNum, platform, extraRows = []) {
     let playerUrl;
     if (platform === 'freereels') playerUrl = getPlayerUrl(streamUrl, title, epNum);
     else if (platform === 'reelshort') playerUrl = getDirectPlayerUrl(streamUrl, title, epNum);
@@ -153,26 +192,26 @@ async function sendStreamLink(q, streamUrl, title, epNum, platform) {
 
     const embed = new EmbedBuilder()
         .setColor(0xFEA800)
-        .setTitle(`🔗 Episode ${epNum} — ${title.slice(0, 200)}`)
+        .setTitle(`🔗 EPISODE ${epNum} — ${title.slice(0, 200)}`)
         .setDescription(`File terlalu besar atau kualitas terlalu tinggi untuk Discord.\n\n**[▶ Klik untuk tonton di browser](${playerUrl})**\n\nLink streaming kualitas penuh tanpa kompresi.`)
         .setFooter({ text: `${LABELS[platform] || platform} · Streaming · Hanya kamu yang bisa melihat ini` });
-    await q.editReply({ content: null, embeds: [embed] });
+    await q.editReply({ content: null, embeds: [embed], components: extraRows });
     trackCommand({ platform, user: q.user?.username || 'unknown', action: `Ep ${epNum}`, title, result: 'stream' });
 }
 
 // ─── Video file sender ────────────────────────────────────────────────────────
 
-async function sendVideoFile(q, filePath, sizeBytes, title, epNum, platform, quality) {
+async function sendVideoFile(q, filePath, sizeBytes, title, epNum, platform, quality, extraRows = []) {
     const sizeMB = (sizeBytes / 1024 / 1024).toFixed(1);
     const attachment = new AttachmentBuilder(filePath, {
         name: `${platform}_ep${epNum}_${title.replace(/[^a-zA-Z0-9]/g, '_').slice(0, 25)}.mp4`
     });
     const embed = new EmbedBuilder()
         .setColor(COLORS[platform] || 0x99AAB5)
-        .setTitle(`🎬 Episode ${epNum} — ${title.slice(0, 200)}`)
+        .setTitle(`🎬 EPISODE ${epNum} — ${title.slice(0, 200)}`)
         .setDescription(`Kualitas: **${quality}** · Langsung putar di Discord ↓`)
         .setFooter({ text: `${LABELS[platform]} · ${sizeMB} MB · Hanya kamu yang melihat ini` });
-    await q.editReply({ content: null, embeds: [embed], files: [attachment] });
+    await q.editReply({ content: null, embeds: [embed], files: [attachment], components: extraRows });
     trackCommand({ platform, user: q.user?.username || 'unknown', action: `Ep ${epNum} (${quality})`, title, result: 'download' });
 }
 
@@ -186,7 +225,7 @@ async function showFrDetail(interaction, key, userId) {
         if (!info) return interaction.editReply({ content: '❌ Detail tidak ditemukan.' });
 
         const rawEps = info.episode_list || [];
-        const episodes = rawEps.map((ep, i) => ({ ...ep, label: `Episode ${i + 1}`, locked: false, _idx: i }));
+        const episodes = rawEps.map((ep, i) => ({ ...ep, label: `EPISODE ${i + 1}`, locked: false, _idx: i }));
 
         const embed = new EmbedBuilder()
             .setColor(COLORS.freereels)
@@ -203,6 +242,43 @@ async function showFrDetail(interaction, key, userId) {
         await interaction.editReply({ embeds: [embed], components: rows });
         if (episodes.length === 0) return;
 
+        const title = info.name || info.title || 'Drama';
+
+        async function processFrEp(target, epIdx, quality) {
+            const ep = episodes[epIdx];
+            if (!ep) return;
+            const rawEp = rawEps[ep._idx];
+            const videoUrl = rawEp.external_audio_h264_m3u8 || rawEp.external_audio_h265_m3u8 || rawEp.m3u8_url;
+            const idSub = (rawEp.subtitle_list || []).find(s => s.language === 'id-ID');
+            const subUrl = idSub?.subtitle || null;
+            const epNum = ep._idx + 1;
+            const hasNext = epIdx + 1 < episodes.length;
+
+            if (!videoUrl) return target.editReply({ content: '❌ Link video tidak tersedia.', components: [] });
+
+            if (quality === 'stream') {
+                await sendStreamLink(target, videoUrl, title, epNum, 'freereels');
+                if (hasNext) await attachNextEpBtn(target, epIdx + 2, userId, btn => processFrEp(btn, epIdx + 1, quality));
+                return;
+            }
+
+            await target.editReply({ content: `⏳ Mengunduh EPISODE ${epNum} (${quality})... 20–90 detik`, components: [] });
+            let filePath = null;
+            try {
+                const res = await downloadFreeReelsEpisode(videoUrl, subUrl, rawEp.duration || null, quality);
+                filePath = res.filePath;
+                await sendVideoFile(target, filePath, res.sizeBytes, title, epNum, 'freereels', quality);
+                if (hasNext) await attachNextEpBtn(target, epIdx + 2, userId, btn => processFrEp(btn, epIdx + 1, quality));
+            } catch (err) {
+                if (err.streamFallback && err.streamUrl) {
+                    await sendStreamLink(target, err.streamUrl, title, epNum, 'freereels');
+                    if (hasNext) await attachNextEpBtn(target, epIdx + 2, userId, btn => processFrEp(btn, epIdx + 1, quality));
+                    return;
+                }
+                await target.editReply({ content: `❌ Gagal: ${err.message}`, files: [], components: [] }).catch(() => {});
+            } finally { if (filePath) cleanup(filePath); }
+        }
+
         const msg = await interaction.fetchReply();
         let page = 0;
         const col = msg.createMessageComponentCollector({ time: 300_000 });
@@ -210,41 +286,21 @@ async function showFrDetail(interaction, key, userId) {
             try {
                 if (c.user.id !== userId) return c.reply({ content: '⛔ Hanya kamu yang bisa memilih.', flags: 64 });
                 if (c.isStringSelectMenu()) {
-                    const ep = episodes[parseInt(c.values[0])];
+                    const epIdx = parseInt(c.values[0]);
+                    const ep = episodes[epIdx];
                     if (!ep) return;
                     if (ep.locked) return c.reply({ content: '🔒 Episode ini terkunci.', flags: 64 });
-
-                    const rawEp = rawEps[ep._idx];
-                    const videoUrl = rawEp.external_audio_h264_m3u8 || rawEp.external_audio_h265_m3u8 || rawEp.m3u8_url;
-                    const idSub = (rawEp.subtitle_list || []).find(s => s.language === 'id-ID');
-                    const subUrl = idSub?.subtitle || null;
-                    const epLabel = `${ep.label} — ${info.name || info.title || ''}`;
-                    const epNum = ep._idx + 1;
-                    const title = info.name || info.title || 'Drama';
-
-                    if (!videoUrl) return c.reply({ content: '❌ Link video tidak tersedia.', flags: 64 });
                     await c.deferReply({ flags: 64 });
-
+                    const epLabel = `${ep.label} — ${title}`;
                     await showQualityPicker(c, userId, epLabel, async (q, quality) => {
-                        if (quality === 'stream') {
-                            return sendStreamLink(q, videoUrl, title, epNum, 'freereels');
-                        }
-                        await q.editReply({ content: `⏳ Mengunduh Episode ${epNum} (${quality})... 20–90 detik` });
-                        let filePath = null;
-                        try {
-                            const res = await downloadFreeReelsEpisode(videoUrl, subUrl, rawEp.duration || null, quality);
-                            filePath = res.filePath;
-                            await sendVideoFile(q, filePath, res.sizeBytes, title, epNum, 'freereels', quality);
-                        } catch (err) {
-                            if (err.streamFallback && err.streamUrl) return sendStreamLink(q, err.streamUrl, title, epNum, 'freereels');
-                            await q.editReply({ content: `❌ Gagal: ${err.message}`, files: [] }).catch(() => {});
-                        } finally { if (filePath) cleanup(filePath); }
+                        await processFrEp(q, epIdx, quality);
                     });
                 } else if (c.isButton()) {
                     if (c.customId.includes('_nav_next_')) { page++; await c.update({ embeds: [embed], components: buildEpisodeSelect(episodes, page, `${cid}_sel`, `${cid}_nav`) }); }
                     else if (c.customId.includes('_nav_prev_')) { page--; await c.update({ embeds: [embed], components: buildEpisodeSelect(episodes, page, `${cid}_sel`, `${cid}_nav`) }); }
                 }
             } catch (err) {
+                if (err.code === 10062 || err.code === 40060) return;
                 console.error('[frDetail collect]', err.message);
             }
         });
@@ -265,7 +321,7 @@ async function showRsDetail(interaction, bookId, userId) {
         if (!data?.bookId && !data?.title) return interaction.editReply({ content: '❌ Detail tidak ditemukan.' });
 
         const rawChapters = (data.chapters || []).filter(c => c.serialNumber > 0);
-        const episodes = rawChapters.map((ch, i) => ({ ...ch, label: ch.title || `Episode ${ch.serialNumber}`, locked: !!ch.isLocked, _idx: i }));
+        const episodes = rawChapters.map((ch, i) => ({ ...ch, label: ch.title || `EPISODE ${ch.serialNumber}`, locked: !!ch.isLocked, _idx: i }));
         const title = data.title || '';
 
         const embed = new EmbedBuilder()
@@ -282,6 +338,60 @@ async function showRsDetail(interaction, bookId, userId) {
         await interaction.editReply({ embeds: [embed], components: rows });
         if (episodes.length === 0) return;
 
+        async function processRsEp(target, epIdx, quality) {
+            const ep = episodes[epIdx];
+            if (!ep) return;
+            const chapter = rawChapters[ep._idx];
+            const epNum = chapter.serialNumber;
+            const hasNext = epIdx + 1 < episodes.length;
+
+            if (quality === 'stream') {
+                await target.editReply({ content: '⏳ Mengambil link streaming...', components: [] });
+                try {
+                    const rawVid = await rsApi.getEpisodeVideo(bookId, epNum);
+                    const vd = rawVid?.videoList ? rawVid : (rawVid?.data || rawVid);
+                    const vl = vd.videoList || [];
+                    const best = vl.sort((a, b) => b.quality - a.quality)[0];
+                    if (!best) return target.editReply({ content: '❌ Link video tidak tersedia.', components: [] });
+                    await sendStreamLink(target, best.url, title, epNum, 'reelshort');
+                    if (hasNext) await attachNextEpBtn(target, epIdx + 2, userId, btn => processRsEp(btn, epIdx + 1, quality));
+                } catch (err) { return target.editReply({ content: `❌ Gagal: ${err.message}`, components: [] }); }
+                return;
+            }
+
+            await target.editReply({ content: `⏳ Mengunduh EPISODE ${epNum} (${quality})... 10–60 detik`, components: [] });
+            let filePath = null;
+            try {
+                const rawVid = await rsApi.getEpisodeVideo(bookId, epNum);
+                const vd = rawVid?.videoList ? rawVid : (rawVid?.data || rawVid);
+                if (vd.isLocked) return target.editReply({ content: '🔒 Episode ini terkunci.', components: [] });
+
+                const vl = vd.videoList || [];
+                const h264 = vl.filter(v => v.encode === 'H264').sort((a, b) => a.quality - b.quality);
+                const all = vl.sort((a, b) => a.quality - b.quality);
+                let chosen;
+                if (quality === '720p') {
+                    const sorted = (h264.length ? h264 : all);
+                    chosen = sorted[sorted.length - 1];
+                } else {
+                    chosen = (h264.length ? h264 : all)[0];
+                }
+                if (!chosen) return target.editReply({ content: '❌ Link video tidak tersedia.', components: [] });
+
+                const res = await downloadReelShortEpisode(chosen.url, quality);
+                filePath = res.filePath;
+                await sendVideoFile(target, filePath, res.sizeBytes, title, epNum, 'reelshort', quality);
+                if (hasNext) await attachNextEpBtn(target, epIdx + 2, userId, btn => processRsEp(btn, epIdx + 1, quality));
+            } catch (err) {
+                if (err.streamFallback && err.streamUrl) {
+                    await sendStreamLink(target, err.streamUrl, title, epNum, 'reelshort');
+                    if (hasNext) await attachNextEpBtn(target, epIdx + 2, userId, btn => processRsEp(btn, epIdx + 1, quality));
+                    return;
+                }
+                await target.editReply({ content: `❌ Gagal: ${err.message}`, files: [], components: [] }).catch(() => {});
+            } finally { if (filePath) cleanup(filePath); }
+        }
+
         const msg = await interaction.fetchReply();
         let page = 0;
         const col = msg.createMessageComponentCollector({ time: 300_000 });
@@ -289,62 +399,21 @@ async function showRsDetail(interaction, bookId, userId) {
             try {
                 if (c.user.id !== userId) return c.reply({ content: '⛔ Hanya kamu yang bisa memilih.', flags: 64 });
                 if (c.isStringSelectMenu()) {
-                    const ep = episodes[parseInt(c.values[0])];
+                    const epIdx = parseInt(c.values[0]);
+                    const ep = episodes[epIdx];
                     if (!ep) return;
                     if (ep.locked) return c.reply({ content: '🔒 Episode ini terkunci.', flags: 64 });
-
-                    const chapter = rawChapters[ep._idx];
-                    const epNum = chapter.serialNumber;
-                    const epLabel = `${ep.label} — ${title}`;
                     await c.deferReply({ flags: 64 });
-
+                    const epLabel = `${ep.label} — ${title}`;
                     await showQualityPicker(c, userId, epLabel, async (q, quality) => {
-                        if (quality === 'stream') {
-                            // Need video URL first for stream link
-                            await q.editReply({ content: '⏳ Mengambil link streaming...' });
-                            try {
-                                const rawVid = await rsApi.getEpisodeVideo(bookId, epNum);
-                                const vd = rawVid?.videoList ? rawVid : (rawVid?.data || rawVid);
-                                const vl = vd.videoList || [];
-                                const best = vl.sort((a, b) => b.quality - a.quality)[0];
-                                if (!best) return q.editReply({ content: '❌ Link video tidak tersedia.' });
-                                return sendStreamLink(q, best.url, title, epNum, 'reelshort');
-                            } catch (err) { return q.editReply({ content: `❌ Gagal: ${err.message}` }); }
-                        }
-
-                        await q.editReply({ content: `⏳ Mengunduh Episode ${epNum} (${quality})... 10–60 detik` });
-                        let filePath = null;
-                        try {
-                            const rawVid = await rsApi.getEpisodeVideo(bookId, epNum);
-                            const vd = rawVid?.videoList ? rawVid : (rawVid?.data || rawVid);
-                            if (vd.isLocked) return q.editReply({ content: '🔒 Episode ini terkunci.' });
-
-                            const vl = vd.videoList || [];
-                            // Pick quality stream: 360p wants lowest, 720p wants highest
-                            const h264 = vl.filter(v => v.encode === 'H264').sort((a, b) => a.quality - b.quality);
-                            const all = vl.sort((a, b) => a.quality - b.quality);
-                            let chosen;
-                            if (quality === '720p') {
-                                const sorted = (h264.length ? h264 : all);
-                                chosen = sorted[sorted.length - 1]; // highest quality
-                            } else {
-                                chosen = (h264.length ? h264 : all)[0]; // lowest (360p)
-                            }
-                            if (!chosen) return q.editReply({ content: '❌ Link video tidak tersedia.' });
-
-                            const res = await downloadReelShortEpisode(chosen.url, quality);
-                            filePath = res.filePath;
-                            await sendVideoFile(q, filePath, res.sizeBytes, title, epNum, 'reelshort', quality);
-                        } catch (err) {
-                            if (err.streamFallback && err.streamUrl) return sendStreamLink(q, err.streamUrl, title, epNum, 'reelshort');
-                            await q.editReply({ content: `❌ Gagal: ${err.message}`, files: [] }).catch(() => {});
-                        } finally { if (filePath) cleanup(filePath); }
+                        await processRsEp(q, epIdx, quality);
                     });
                 } else if (c.isButton()) {
                     if (c.customId.includes('_nav_next_')) { page++; await c.update({ embeds: [embed], components: buildEpisodeSelect(episodes, page, `${cid}_sel`, `${cid}_nav`) }); }
                     else if (c.customId.includes('_nav_prev_')) { page--; await c.update({ embeds: [embed], components: buildEpisodeSelect(episodes, page, `${cid}_sel`, `${cid}_nav`) }); }
                 }
             } catch (err) {
+                if (err.code === 10062 || err.code === 40060) return;
                 console.error('[rsDetail collect]', err.message);
             }
         });
@@ -364,7 +433,7 @@ async function showMlDetail(interaction, bookId, userId) {
         const detail = mlApi.parseDetail(raw);
         if (!detail.title) return interaction.editReply({ content: '❌ Detail tidak ditemukan.' });
 
-        const episodes = detail.episodes.map((ep, i) => ({ ...ep, label: ep.title || `Episode ${ep.index}`, locked: ep.locked, _idx: i }));
+        const episodes = detail.episodes.map((ep, i) => ({ ...ep, label: ep.title || `EPISODE ${ep.index}`, locked: ep.locked, _idx: i }));
         const title = detail.title;
 
         const embed = new EmbedBuilder()
@@ -381,6 +450,51 @@ async function showMlDetail(interaction, bookId, userId) {
         await interaction.editReply({ embeds: [embed], components: rows });
         if (episodes.length === 0) return;
 
+        async function processMlEp(target, epIdx, quality) {
+            const ep = episodes[epIdx];
+            if (!ep) return;
+            const rawEp = detail.episodes[ep._idx];
+            const epNum = rawEp.index;
+            const hasNext = epIdx + 1 < episodes.length;
+
+            await target.editReply({ content: '⏳ Mengambil link video...', components: [] });
+            let filePath = null;
+            try {
+                const streamRaw = await mlApi.getStream(rawEp.vid);
+                const { qualities, topUrl, duration } = mlApi.parseVideoQualities(streamRaw.data || streamRaw);
+                const dur = rawEp.duration || duration;
+
+                if (quality === 'stream') {
+                    const streamUrl = topUrl || (qualities[qualities.length - 1]?.url || '');
+                    if (!streamUrl) return target.editReply({ content: '❌ URL streaming tidak tersedia.', components: [] });
+                    await sendStreamLink(target, streamUrl, title, epNum, 'melolo');
+                    if (hasNext) await attachNextEpBtn(target, epIdx + 2, userId, btn => processMlEp(btn, epIdx + 1, quality));
+                    return;
+                }
+
+                let chosen;
+                if (quality === '720p') {
+                    chosen = qualities.find(v => v.definition === '720p' || v.height >= 720) || qualities[qualities.length - 1];
+                } else {
+                    chosen = qualities.find(v => v.definition === '360p' || v.definition === '240p' || v.height <= 480) || qualities[0];
+                }
+                if (!chosen) return target.editReply({ content: '❌ URL video tidak tersedia.', components: [] });
+
+                await target.editReply({ content: `⏳ Mengunduh EPISODE ${epNum} (${quality})... 20–90 detik`, components: [] });
+                const res = await downloadMeloloEpisode(chosen.url, dur, quality);
+                filePath = res.filePath;
+                await sendVideoFile(target, filePath, res.sizeBytes, title, epNum, 'melolo', quality);
+                if (hasNext) await attachNextEpBtn(target, epIdx + 2, userId, btn => processMlEp(btn, epIdx + 1, quality));
+            } catch (err) {
+                if (err.streamFallback && err.streamUrl) {
+                    await sendStreamLink(target, err.streamUrl, title, epNum, 'melolo');
+                    if (hasNext) await attachNextEpBtn(target, epIdx + 2, userId, btn => processMlEp(btn, epIdx + 1, quality));
+                    return;
+                }
+                await target.editReply({ content: `❌ Gagal: ${err.message}`, files: [], components: [] }).catch(() => {});
+            } finally { if (filePath) cleanup(filePath); }
+        }
+
         const msg = await interaction.fetchReply();
         let page = 0;
         const col = msg.createMessageComponentCollector({ time: 300_000 });
@@ -388,52 +502,21 @@ async function showMlDetail(interaction, bookId, userId) {
             try {
                 if (c.user.id !== userId) return c.reply({ content: '⛔ Hanya kamu yang bisa memilih.', flags: 64 });
                 if (c.isStringSelectMenu()) {
-                    const ep = episodes[parseInt(c.values[0])];
+                    const epIdx = parseInt(c.values[0]);
+                    const ep = episodes[epIdx];
                     if (!ep) return;
                     if (ep.locked) return c.reply({ content: '🔒 Episode ini terkunci.', flags: 64 });
-
-                    const rawEp = detail.episodes[ep._idx];
-                    const epLabel = `${ep.label} — ${title}`;
-                    const epNum = rawEp.index;
                     await c.deferReply({ flags: 64 });
-
+                    const epLabel = `${ep.label} — ${title}`;
                     await showQualityPicker(c, userId, epLabel, async (q, quality) => {
-                        await q.editReply({ content: '⏳ Mengambil link video...' });
-                        let filePath = null;
-                        try {
-                            const streamRaw = await mlApi.getStream(rawEp.vid);
-                            const { qualities, topUrl, duration } = mlApi.parseVideoQualities(streamRaw.data || streamRaw);
-                            const dur = rawEp.duration || duration;
-
-                            if (quality === 'stream') {
-                                const streamUrl = topUrl || (qualities[qualities.length - 1]?.url || '');
-                                if (!streamUrl) return q.editReply({ content: '❌ URL streaming tidak tersedia.' });
-                                return sendStreamLink(q, streamUrl, title, epNum, 'melolo');
-                            }
-
-                            // Pick appropriate quality video
-                            let chosen;
-                            if (quality === '720p') {
-                                chosen = qualities.find(v => v.definition === '720p' || v.height >= 720) || qualities[qualities.length - 1];
-                            } else {
-                                chosen = qualities.find(v => v.definition === '360p' || v.definition === '240p' || v.height <= 480) || qualities[0];
-                            }
-                            if (!chosen) return q.editReply({ content: '❌ URL video tidak tersedia.' });
-
-                            await q.editReply({ content: `⏳ Mengunduh Episode ${epNum} (${quality})... 20–90 detik` });
-                            const res = await downloadMeloloEpisode(chosen.url, dur, quality);
-                            filePath = res.filePath;
-                            await sendVideoFile(q, filePath, res.sizeBytes, title, epNum, 'melolo', quality);
-                        } catch (err) {
-                            if (err.streamFallback && err.streamUrl) return sendStreamLink(q, err.streamUrl, title, epNum, 'melolo');
-                            await q.editReply({ content: `❌ Gagal: ${err.message}`, files: [] }).catch(() => {});
-                        } finally { if (filePath) cleanup(filePath); }
+                        await processMlEp(q, epIdx, quality);
                     });
                 } else if (c.isButton()) {
                     if (c.customId.includes('_nav_next_')) { page++; await c.update({ embeds: [embed], components: buildEpisodeSelect(episodes, page, `${cid}_sel`, `${cid}_nav`) }); }
                     else if (c.customId.includes('_nav_prev_')) { page--; await c.update({ embeds: [embed], components: buildEpisodeSelect(episodes, page, `${cid}_sel`, `${cid}_nav`) }); }
                 }
             } catch (err) {
+                if (err.code === 10062 || err.code === 40060) return;
                 console.error('[mlDetail collect]', err.message);
             }
         });
@@ -487,28 +570,24 @@ async function showMbDetail(interaction, subjectId, userId) {
         if (stars) fields.push({ name: '👥 Pemain', value: stars, inline: false });
         if (fields.length) embed.addFields(fields);
 
-        // ── Helpers ──────────────────────────────────────────────────────────────
-        function buildWatchRow() {
-            return new ActionRowBuilder().addComponents(
-                new ButtonBuilder().setCustomId('mbq_watch').setLabel('▶ Tonton Sekarang').setStyle(ButtonStyle.Success),
-            );
-        }
-
-        async function streamEpisode(q, season, epNum) {
+        async function streamEpisode(target, season, epNum) {
             const playerUrl = getMbPlayerUrl(subjectId, null, title, season, epNum);
-            const epLine = isSeries && season != null ? `\n📺 Season ${season} · Episode ${epNum}` : '';
+            const epLine = isSeries && season != null ? `\n📺 Season ${season} · EPISODE ${epNum}` : '';
             const resEmbed = new EmbedBuilder()
                 .setColor(COLORS.moviebox)
                 .setTitle(`🔗 ${title.slice(0, 200)}`)
                 .setDescription(`**[▶ Tonton di MovieBox](${playerUrl})**${epLine}\nDibuka di MovieBox Web Player.`)
                 .setFooter({ text: 'MovieBox · Hanya kamu yang bisa lihat ini' });
-            await q.editReply({ content: null, embeds: [resEmbed], components: [] });
-            trackCommand({ platform: 'moviebox', user: q.user?.username || 'unknown', action: isSeries ? `S${season}E${epNum}` : 'Tonton', title, result: 'stream' });
+            await target.editReply({ content: null, embeds: [resEmbed], components: [] });
+            trackCommand({ platform: 'moviebox', user: target.user?.username || 'unknown', action: isSeries ? `S${season}E${epNum}` : 'Tonton', title, result: 'stream' });
         }
 
         // ── Movie flow ────────────────────────────────────────────────────────────
         if (!isSeries) {
-            await interaction.editReply({ embeds: [embed], components: [buildWatchRow()] });
+            const watchRow = new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId('mbq_watch').setLabel('▶ Tonton Sekarang').setStyle(ButtonStyle.Success)
+            );
+            await interaction.editReply({ embeds: [embed], components: [watchRow] });
             const msg = await interaction.fetchReply();
             const qcol = msg.createMessageComponentCollector({ time: 120_000 });
             qcol.on('collect', async q => {
@@ -517,35 +596,33 @@ async function showMbDetail(interaction, subjectId, userId) {
                     await q.deferUpdate();
                     await streamEpisode(q, null, null);
                 } catch (err) {
+                    if (err.code === 10062 || err.code === 40060) return;
                     console.error('[mb/watch]', err.message);
-                    await q.editReply({ content: `❌ Gagal: ${err.message}`, embeds: [], components: [] }).catch(() => {});
                 }
             });
             qcol.on('end', () => interaction.editReply({ components: [] }).catch(() => {}));
             return;
         }
 
-        // ── Series flow: season → episode → quality ───────────────────────────────
+        // ── Series flow ───────────────────────────────────────────────────────────
         let currentSe = seasons[0].se;
         let epPage = 0;
         const PAGE_SIZE = 20;
 
         async function renderEpisodePicker(target) {
             const season = seasons.find(s => s.se === currentSe) || seasons[0];
-            // fallback: pakai allEp (comma-separated) kalau maxEp kosong
             let maxEp = parseInt(season.maxEp) || 0;
             if (!maxEp && season.allEp) maxEp = season.allEp.split(',').filter(Boolean).length;
-            if (!maxEp) maxEp = 1; // minimal 1 episode supaya tidak crash
+            if (!maxEp) maxEp = 1;
 
             const start = epPage * PAGE_SIZE + 1;
             const end = Math.min(start + PAGE_SIZE - 1, maxEp);
 
             const options = [];
             for (let ep = start; ep <= end; ep++) {
-                options.push(new StringSelectMenuOptionBuilder().setLabel(`Episode ${ep}`).setValue(`${ep}`));
+                options.push(new StringSelectMenuOptionBuilder().setLabel(`EPISODE ${ep}`).setValue(`${ep}`));
             }
 
-            // Discord tidak boleh dropdown kosong
             if (!options.length) {
                 return target.editReply({ content: '❌ Data episode tidak tersedia untuk season ini.', embeds: [], components: [] });
             }
@@ -575,6 +652,13 @@ async function showMbDetail(interaction, subjectId, userId) {
             await target.editReply({ embeds: [embed], components: rows });
         }
 
+        async function streamEpWithNext(target, season, epNum, maxEp) {
+            await streamEpisode(target, season, epNum);
+            if (epNum < maxEp) {
+                await attachNextEpBtn(target, epNum + 1, userId, btn => streamEpWithNext(btn, season, epNum + 1, maxEp));
+            }
+        }
+
         await renderEpisodePicker(interaction);
         const msg = await interaction.fetchReply();
         const col = msg.createMessageComponentCollector({ time: 300_000 });
@@ -594,12 +678,16 @@ async function showMbDetail(interaction, subjectId, userId) {
                 } else if (btn.customId === 'mbnext') {
                     epPage++;
                     await renderEpisodePicker(btn);
-                } else if (btn.customId === 'mbep') {
+                } else if (btn.isStringSelectMenu?.() || btn.customId === 'mbep') {
                     const epNum = parseInt(btn.values[0]);
+                    const season = seasons.find(s => s.se === currentSe) || seasons[0];
+                    let maxEp = parseInt(season.maxEp) || 0;
+                    if (!maxEp && season.allEp) maxEp = season.allEp.split(',').filter(Boolean).length;
                     col.stop('epSelected');
-                    await streamEpisode(btn, currentSe, epNum);
+                    await streamEpWithNext(btn, currentSe, epNum, maxEp);
                 }
             } catch (err) {
+                if (err.code === 10062 || err.code === 40060) return;
                 console.error('[mb/series]', err.message);
             }
         });
@@ -649,6 +737,7 @@ async function showList(interaction, items, listTitle, userId, useFollowUp = fal
 
             await btn.update({ embeds: [buildListEmbed(items[idx], idx, items.length, listTitle)], components: [buildNavRow(cid, idx, items.length, items[idx])] });
         } catch (err) {
+            if (err.code === 10062 || err.code === 40060) return;
             console.error('[listCollect]', err.message);
         }
     });
@@ -701,7 +790,7 @@ module.exports = {
                 const allItems = [];
                 const seen = new Set();
 
-                // ReelShort — real search API
+                // ReelShort
                 try {
                     const rsData = await rsApi.search(judul, 1);
                     for (const item of rsExtract(rsData)) {
@@ -709,174 +798,89 @@ module.exports = {
                     }
                 } catch (e) { console.warn('[drama/cari] RS:', e.message); }
 
-                // Melolo — real search API
+                // Melolo
                 try {
                     const mlData = await mlApi.search(judul);
-                    for (const item of mlApi.parseSearchItems(mlData)) {
-                        if (!seen.has(item.key)) { seen.add(item.key); allItems.push(item); }
+                    const mlItems = mlApi.parseSearch(mlData);
+                    for (const item of mlItems) {
+                        const k = `ml_${item.bookId || item.id}`;
+                        if (!seen.has(k)) { seen.add(k); allItems.push({ _source: 'melolo', key: item.bookId || item.id, title: item.title || '', cover: item.cover || null, desc: item.description || item.desc || '', tags: [], episodes: item.episodeCount || null }); }
                     }
                 } catch (e) { console.warn('[drama/cari] ML:', e.message); }
 
-                // MovieBox — real search API
+                // MovieBox
                 try {
                     const mbData = await mbApi.search(judul);
                     for (const item of mbExtract(mbData)) {
-                        if (!seen.has(item.key)) { seen.add(item.key); allItems.push(item); }
+                        if (!seen.has(`mb_${item.key}`)) { seen.add(`mb_${item.key}`); allItems.push(item); }
                     }
                 } catch (e) { console.warn('[drama/cari] MB:', e.message); }
 
-                // FreeReels — filter from browse results
+                // FreeReels — browse + local filter
                 try {
-                    const [homeData, animeData] = await Promise.all([
+                    const keyword = judul.toLowerCase();
+                    const [homeData, fyData] = await Promise.all([
                         frApi.getHomepage().catch(() => null),
-                        frApi.getAnimePage().catch(() => null)
+                        frApi.getForyou(0).catch(() => null),
                     ]);
-                    for (const d of [homeData, animeData]) {
-                        for (const i of frExtract(d)) {
-                            if (!seen.has(i.key)) { seen.add(i.key); allItems.push(i); }
-                        }
-                    }
-                    for (const offset of [0, 20, 40, 60, 80, 100, 120, 140, 160]) {
-                        try {
-                            const d = await frApi.getForYou(offset);
-                            const items = frExtract(d);
-                            if (!items.length) break;
-                            for (const i of items) { if (!seen.has(i.key)) { seen.add(i.key); allItems.push(i); } }
-                        } catch { break; }
+                    const frItems = [...frExtract(homeData), ...frExtract(fyData)]
+                        .filter(i => i.title.toLowerCase().includes(keyword));
+                    for (const item of frItems) {
+                        if (!seen.has(`fr_${item.key}`)) { seen.add(`fr_${item.key}`); allItems.push(item); }
                     }
                 } catch (e) { console.warn('[drama/cari] FR:', e.message); }
 
-                const kw = judul.toLowerCase();
-                // RS, Melolo, MovieBox results are search-matched; FR needs keyword filter
-                const matched = allItems.filter(i => {
-                    if (i._source === 'reelshort' || i._source === 'melolo' || i._source === 'moviebox') return true;
-                    const t = [i.title, i.desc, ...(Array.isArray(i.tags) ? i.tags.map(t => typeof t === 'string' ? t : t?.name || '') : [])].filter(Boolean).join(' ').toLowerCase();
-                    return t.includes(kw);
-                });
+                if (allItems.length === 0) return interaction.editReply({ content: `❌ Tidak ada hasil untuk **${judul}**.` });
+                return showList(interaction, allItems, `🔍 Hasil: "${judul}"`, userId);
+            }
 
-                if (matched.length === 0) {
-                    return interaction.editReply({ content: `❌ Tidak ketemu **"${judul}"**, coba kata kunci lain.` });
-                }
-
-                // Sort by title relevance: exact > starts with > contains > other
-                function titleScore(item) {
-                    const t = item.title.toLowerCase();
-                    if (t === kw) return 3;
-                    if (t.startsWith(kw)) return 2;
-                    if (t.includes(kw)) return 1;
-                    return 0;
-                }
-                matched.sort((a, b) => titleScore(b) - titleScore(a));
-
-                // Pisah dua rak
-                const dramaItems = matched.filter(i => i._source !== 'moviebox');
-                const mbItems    = matched.filter(i => i._source === 'moviebox');
-                const cid = `cari_${interaction.id}`;
-
-                // Kalau hanya satu kategori, langsung tampilkan listnya
-                if (!dramaItems.length || !mbItems.length) {
-                    const items = dramaItems.length ? dramaItems : mbItems;
-                    const label = dramaItems.length ? `📺 Reels/Dracin — "${judul}"` : `🎬 Movie/Serial Drama — "${judul}"`;
-                    await interaction.editReply({ content: `🔍 <@${userId}> Ketemu **${items.length} hasil** untuk **"${judul}"** ↓` });
-                    await showList(interaction, items, label, userId, true);
-                    trackCommand({ user: interaction.user.username, action: 'cari', title: judul, result: 'ok' });
-                    return;
-                }
-
-                // Dua kategori — tampilkan tombol pilihan
-                const rackRow = new ActionRowBuilder().addComponents(
-                    new ButtonBuilder().setCustomId(`${cid}_rack_drama`).setLabel(`📺 Reels/Dracin (${dramaItems.length})`).setStyle(ButtonStyle.Primary),
-                    new ButtonBuilder().setCustomId(`${cid}_rack_mb`).setLabel(`🎬 Movie/Serial Drama (${mbItems.length})`).setStyle(ButtonStyle.Success)
-                );
-                const headerEmbed = new EmbedBuilder()
-                    .setColor(0x5865F2)
-                    .setTitle(`🔍 Hasil: "${judul.slice(0, 100)}"`)
-                    .setDescription(`Pilih kategori yang ingin dilihat:\n\n📺 **Reels/Dracin** — ${dramaItems.length} hasil (FreeReels, ReelShort, Melolo)\n🎬 **Movie/Serial Drama** — ${mbItems.length} hasil (MovieBox)`)
-                    .setFooter({ text: 'Hanya kamu yang bisa memilih' });
-
-                await interaction.editReply({ embeds: [headerEmbed], components: [rackRow] });
-                const msg = await interaction.fetchReply();
-
-                let currentItems = null;
-                let currentIdx   = 0;
-                let currentTitle = '';
-
-                const col = msg.createMessageComponentCollector({ time: 300_000 });
-                col.on('collect', async btn => {
-                    try {
-                        if (btn.user.id !== userId) return btn.reply({ content: '⛔ Bukan giliranmu.', flags: 64 });
-
-                        if (btn.customId === `${cid}_rack_drama`) {
-                            currentItems = dramaItems;
-                            currentTitle = `📺 Reels/Dracin — "${judul}"`;
-                            currentIdx = 0;
-                        } else if (btn.customId === `${cid}_rack_mb`) {
-                            currentItems = mbItems;
-                            currentTitle = `🎬 Movie/Serial Drama — "${judul}"`;
-                            currentIdx = 0;
-                        } else if (btn.customId.includes('_next_') && currentItems) {
-                            currentIdx = Math.min(currentIdx + 1, currentItems.length - 1);
-                        } else if (btn.customId.includes('_prev_') && currentItems) {
-                            currentIdx = Math.max(currentIdx - 1, 0);
-                        } else if (btn.customId.includes('_det_')) {
-                            const parts2 = btn.customId.split('_det_')[1].split('_');
-                            const plt = parts2[0];
-                            const key = parts2.slice(1).join('_');
-                            if (plt === 'freereels') return showFrDetail(btn, key, userId);
-                            if (plt === 'reelshort') return showRsDetail(btn, key, userId);
-                            if (plt === 'melolo')    return showMlDetail(btn, key, userId);
-                            if (plt === 'moviebox')  return showMbDetail(btn, key, userId);
-                            return;
-                        } else return;
-
-                        const item = currentItems[currentIdx];
-                        await btn.update({
-                            embeds:     [buildListEmbed(item, currentIdx, currentItems.length, currentTitle)],
-                            components: [buildNavRow(cid, currentIdx, currentItems.length, item)],
-                        });
-                    } catch (err) {
-                        console.error('[cari/collect]', err.message);
-                    }
-                });
-                col.on('end', () => msg.edit({ components: [] }).catch(() => {}));
-
-                trackCommand({ user: interaction.user.username, action: 'cari', title: judul, result: 'ok' });
-
-            } else if (sub === 'foryou') {
+            if (sub === 'foryou') {
                 const offset = interaction.options.getInteger('offset') || 0;
-                const data = await frApi.getForYou(offset);
+                await interaction.editReply({ content: '⏳ Memuat drama FreeReels...' });
+                const data = await frApi.getForyou(offset);
                 const items = frExtract(data);
-                if (!items.length) return interaction.editReply({ content: '❌ Tidak ada data.' });
-                await showList(interaction, items, `FreeReels · For You (offset ${offset})`, userId);
-                trackCommand({ platform: 'freereels', user: interaction.user.username, action: 'foryou', result: 'ok' });
+                if (items.length === 0) return interaction.editReply({ content: '❌ Tidak ada drama ditemukan.' });
+                return showList(interaction, items, `🎭 FreeReels · For You (offset ${offset})`, userId);
+            }
 
-            } else if (sub === 'reelshort') {
+            if (sub === 'reelshort') {
                 const offset = interaction.options.getInteger('offset') || 0;
-                const data = await rsApi.getForYou(offset);
+                await interaction.editReply({ content: '⏳ Memuat drama ReelShort...' });
+                const data = await rsApi.getForyou(offset);
                 const items = rsExtract(data);
-                if (!items.length) return interaction.editReply({ content: '❌ Tidak ada data.' });
-                await showList(interaction, items, `ReelShort · For You (offset ${offset})`, userId);
-                trackCommand({ platform: 'reelshort', user: interaction.user.username, action: 'foryou', result: 'ok' });
+                if (items.length === 0) return interaction.editReply({ content: '❌ Tidak ada drama ditemukan.' });
+                return showList(interaction, items, `🎬 ReelShort · For You (offset ${offset})`, userId);
+            }
 
-            } else if (sub === 'melolo') {
-                const data = await mlApi.getForYou();
-                const items = mlApi.parseForYouItems(data);
-                if (!items.length) return interaction.editReply({ content: '❌ Tidak ada data dari Melolo.' });
-                await showList(interaction, items, 'Melolo · For You', userId);
-                trackCommand({ platform: 'melolo', user: interaction.user.username, action: 'foryou', result: 'ok' });
+            if (sub === 'melolo') {
+                await interaction.editReply({ content: '⏳ Memuat drama Melolo...' });
+                const data = await mlApi.getForyou();
+                const mlParsed = mlApi.parseForyou ? mlApi.parseForyou(data) : (data?.data?.list || data?.list || []);
+                const items = mlParsed.map(i => ({
+                    _source: 'melolo',
+                    key: i.bookId || i.id || i.book_id || '',
+                    title: i.title || i.name || '',
+                    cover: i.cover || i.book_pic || null,
+                    desc: i.description || i.desc || '',
+                    tags: [],
+                    episodes: i.episodeCount || i.episode_count || null,
+                })).filter(i => i.key);
+                if (items.length === 0) return interaction.editReply({ content: '❌ Tidak ada drama ditemukan.' });
+                return showList(interaction, items, '🎥 Melolo · For You', userId);
+            }
 
-            } else if (sub === 'moviebox') {
+            if (sub === 'moviebox') {
                 const page = interaction.options.getInteger('page') || 0;
+                await interaction.editReply({ content: '⏳ Memuat film & series MovieBox...' });
                 const data = await mbApi.getTrending(page);
                 const items = mbExtract(data);
-                if (!items.length) return interaction.editReply({ content: '❌ Tidak ada data dari MovieBox.' });
-                await showList(interaction, items, `MovieBox · Trending (hal. ${page})`, userId);
-                trackCommand({ platform: 'moviebox', user: interaction.user.username, action: 'trending', result: 'ok' });
+                if (items.length === 0) return interaction.editReply({ content: '❌ Tidak ada konten ditemukan.' });
+                return showList(interaction, items, `🎬 MovieBox · Trending (halaman ${page})`, userId);
             }
         } catch (err) {
-            console.error('[drama]', err.message);
-            trackCommand({ user: interaction.user?.username || 'unknown', action: sub || 'unknown', result: 'error' });
-            await interaction.editReply({ content: `❌ Terjadi kesalahan: **${err.message}**` }).catch(() => {});
+            console.error('[interactionCreate] drama:', err.message);
+            if (err.code === 10062 || err.code === 40060) return;
+            interaction.editReply({ content: `❌ Error: ${err.message}` }).catch(() => {});
         }
     }
 };
