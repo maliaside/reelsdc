@@ -1,24 +1,24 @@
-const axios = require('axios');
+const client = require('./client');
 
 const BASE_URL = 'https://api.sansekai.my.id/api/melolo';
 
 async function getForYou() {
-    const res = await axios.get(`${BASE_URL}/foryou`, { timeout: 15000 });
+    const res = await client.get(`${BASE_URL}/foryou`);
     return res.data;
 }
 
 async function getDetail(bookId) {
-    const res = await axios.get(`${BASE_URL}/detail`, { params: { bookId }, timeout: 15000 });
+    const res = await client.get(`${BASE_URL}/detail`, { params: { bookId } });
     return res.data;
 }
 
 async function search(query) {
-    const res = await axios.get(`${BASE_URL}/search`, { params: { query }, timeout: 15000 });
+    const res = await client.get(`${BASE_URL}/search`, { params: { query } });
     return res.data;
 }
 
 async function getStream(videoId) {
-    const res = await axios.get(`${BASE_URL}/stream`, { params: { videoId }, timeout: 15000 });
+    const res = await client.get(`${BASE_URL}/stream`, { params: { videoId } });
     return res.data;
 }
 
