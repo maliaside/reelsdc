@@ -1,7 +1,7 @@
 const axios = require('axios');
 
 const BASE = 'https://api.sansekai.my.id/api/moviebox';
-const RATE_MS = 4100;
+const RATE_MS = 2500;
 let _last = 0;
 
 async function api(path) {
@@ -17,6 +17,10 @@ async function search(query, page = 1) { return api(`/search?query=${encodeURICo
 async function getDetail(subjectId) { return api(`/detail?subjectId=${subjectId}`); }
 async function getSources(subjectId) { return api(`/sources?subjectId=${subjectId}`); }
 async function getEpisodeSources(subjectId, season, episode) { return api(`/sources?subjectId=${subjectId}&season=${season}&episode=${episode}`); }
+// Same call but with a different param variation to attempt a cache miss on the sansekai API
+async function getEpisodeSourcesFresh(subjectId, season, episode) {
+    return api(`/sources?subjectId=${subjectId}&se=${season}&ep=${episode}`);
+}
 
 function parseItems(data) {
     const raw = data?.items || data?.list || [];
@@ -46,4 +50,4 @@ function parseSources(data) {
         }));
 }
 
-module.exports = { getTrending, search, getDetail, getSources, getEpisodeSources, parseItems, parseSources };
+module.exports = { getTrending, search, getDetail, getSources, getEpisodeSources, getEpisodeSourcesFresh, parseItems, parseSources };

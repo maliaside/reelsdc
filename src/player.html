@@ -12,6 +12,8 @@
   h2 { text-align: center; margin-bottom: 12px; font-size: 1.1rem; color: #ccc; }
   video { width: 100%; border-radius: 10px; background: #000; max-height: 80vh; }
   .badge { text-align: center; margin-top: 10px; font-size: 0.8rem; color: #666; }
+  @keyframes pulse { 0%,100%{opacity:.4} 50%{opacity:1} }
+  .loading { animation: pulse 1.2s ease-in-out infinite; }
   .error { text-align: center; color: #f44; font-size: 1rem; margin-top: 20px; }
 </style>
 </head>
@@ -31,7 +33,9 @@
 
   if (title) {
     const decoded = decodeURIComponent(title);
-    document.getElementById('title').textContent = (ep ? 'Episode ' + ep + ' - ' : '') + decoded;
+    const seLabel = params.get('season') && params.get('episode')
+      ? `S${params.get('season')}E${params.get('episode')} · ` : (ep ? 'Episode ' + ep + ' - ' : '');
+    document.getElementById('title').textContent = seLabel + decoded;
     document.title = decoded;
   }
 
@@ -41,14 +45,63 @@
 
   function setError(msg) { errEl.textContent = msg; badge.textContent = ''; }
 
-  if (!src) {
+  let mbResolveParams = null;
+
+  function playMp4(cdnUrl, qualityLabel, stale) {
+    badge.className = 'badge';
+    badge.textContent = 'MovieBox · ' + qualityLabel + 'p · Streaming' + (stale ? ' ⚠️' : '');
+    video.setAttribute('referrerpolicy', 'no-referrer');
+    video.src = cdnUrl;
+    let retried = false;
+    video.addEventListener('error', () => {
+      if (!retried && mbResolveParams) {
+        retried = true;
+        badge.textContent = 'MovieBox · Mencoba ulang...';
+        errEl.textContent = '';
+        fetch('/resolve/mb?' + mbResolveParams.toString() + '&_r=' + Date.now())
+          .then(r => r.json())
+          .then(data2 => {
+            if (data2.error) return setError('Gagal: ' + data2.error + ' · Klik quality di Discord lagi.');
+            if (data2.url !== cdnUrl) {
+              video.src = data2.url;
+              badge.textContent = 'MovieBox · ' + data2.quality + 'p · Streaming (retried)';
+            } else {
+              setError('Link kedaluwarsa. Kembali ke Discord dan pilih kualitas lagi.');
+            }
+          })
+          .catch(() => setError('Link kedaluwarsa. Kembali ke Discord dan pilih kualitas lagi.'));
+      } else {
+        setError('Gagal memuat video. Kembali ke Discord dan pilih kualitas lagi.');
+      }
+    });
+  }
+
+  // ── MovieBox: resolve fresh CDN URL at load time ──────────────────────────
+  if (platform === 'moviebox') {
+    const subjectId = params.get('subjectId');
+    if (!subjectId) return setError('Parameter tidak lengkap.');
+    badge.className = 'badge loading';
+    badge.textContent = 'MovieBox · Memuat link... (maks ~5 detik)';
+    mbResolveParams = new URLSearchParams({ subjectId, quality: params.get('quality') || '360' });
+    if (params.get('season')) mbResolveParams.set('season', params.get('season'));
+    if (params.get('episode')) mbResolveParams.set('episode', params.get('episode'));
+    fetch('/resolve/mb?' + mbResolveParams.toString())
+      .then(r => r.json())
+      .then(data => {
+        if (data.error) return setError('Gagal mendapat link: ' + data.error);
+        playMp4(data.url, data.quality, data.stale);
+      })
+      .catch(e => setError('Gagal resolve URL: ' + e.message));
+
+  // ── HLS / other platforms ─────────────────────────────────────────────────
+  } else if (!src) {
     setError('URL video tidak ditemukan.');
   } else {
     const resolvedSrc = decodeURIComponent(src);
     const isHLS = resolvedSrc.includes('.m3u8') || resolvedSrc.includes('/proxy/m3u8') || resolvedSrc.includes('/proxy/direct');
 
     if (isHLS) {
-      const platLabel = { melolo: 'Melolo', reelshort: 'ReelShort', freereels: 'FreeReels', moviebox: 'MovieBox' }[platform] || platform;
+      const platLabel = { melolo: 'Melolo', reelshort: 'ReelShort', freereels: 'FreeReels' }[platform] || platform;
       badge.textContent = platLabel + ' · Streaming HLS';
       if (Hls.isSupported()) {
         const hls = new Hls({ maxBufferLength: 30, maxMaxBufferLength: 60 });
@@ -65,8 +118,8 @@
         setError('Browser tidak mendukung HLS. Gunakan Chrome atau Safari.');
       }
     } else {
-      // Direct MP4
-      const platLabelMp4 = { melolo: 'Melolo', moviebox: 'MovieBox' }[platform] || 'Video';
+      // Direct MP4 (Melolo)
+      const platLabelMp4 = { melolo: 'Melolo' }[platform] || 'Video';
       const quality = params.get('quality');
       badge.textContent = platLabelMp4 + (quality ? ` · ${quality}p` : '') + ' · Streaming';
       video.src = resolvedSrc;

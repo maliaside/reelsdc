@@ -498,24 +498,15 @@ async function showMbDetail(interaction, subjectId, userId) {
 
         async function streamEpisode(q, season, epNum) {
             const targetQ = parseInt(q.customId.replace('mbq_', ''));
-            await q.editReply({ content: '⏳ Mengambil link streaming...', embeds: [], components: [] });
-            const srcData = isSeries
-                ? await mbApi.getEpisodeSources(subjectId, season, epNum)
-                : await mbApi.getSources(subjectId);
-            const sources = mbApi.parseSources(srcData);
-            if (!sources.length) return q.editReply({ content: '❌ Tidak ada sumber video tersedia.' });
-            let chosen = sources.find(s => s.quality === targetQ)
-                || sources.reduce((b, s) => Math.abs(s.quality - targetQ) < Math.abs(b.quality - targetQ) ? s : b, sources[0]);
-            const playerUrl = getMbPlayerUrl(chosen.url, title, chosen.quality);
-            const sizeStr = chosen.sizeMB > 0 ? ` · ${chosen.sizeMB} MB` : '';
-            const epLine = isSeries ? `\n📺 Season ${season} · Episode ${epNum}` : '';
+            const playerUrl = getMbPlayerUrl(subjectId, targetQ, title, season, epNum);
+            const epLine = isSeries && season != null ? `\n📺 Season ${season} · Episode ${epNum}` : '';
             const resEmbed = new EmbedBuilder()
                 .setColor(COLORS.moviebox)
                 .setTitle(`🔗 ${title.slice(0, 200)}`)
-                .setDescription(`**[▶ Tonton di browser](${playerUrl})**${epLine}\nKualitas: **${chosen.quality}p**${sizeStr}`)
+                .setDescription(`**[▶ Tonton di browser](${playerUrl})**${epLine}\nKualitas: **${targetQ}p** · Streaming langsung di browser.`)
                 .setFooter({ text: 'MovieBox · Streaming · Hanya kamu yang bisa lihat ini' });
             await q.editReply({ content: null, embeds: [resEmbed], components: [] });
-            trackCommand({ platform: 'moviebox', user: q.user?.username || 'unknown', action: isSeries ? `S${season}E${epNum} ${chosen.quality}p` : `Tonton ${chosen.quality}p`, title, result: 'stream' });
+            trackCommand({ platform: 'moviebox', user: q.user?.username || 'unknown', action: isSeries ? `S${season}E${epNum} ${targetQ}p` : `Tonton ${targetQ}p`, title, result: 'stream' });
         }
 
         // ── Movie flow ────────────────────────────────────────────────────────────

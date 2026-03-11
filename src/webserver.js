@@ -15,6 +15,12 @@ const VIDEO_HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36'
 };
 
+const MB_HEADERS = {
+    'Referer': 'https://h5.aoneroom.com',
+    'Origin': 'https://h5.aoneroom.com',
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36'
+};
+
 function getBaseUrl() {
     if (process.env.BOT_BASE_URL) return process.env.BOT_BASE_URL;
     if (process.env.REPLIT_DEV_DOMAIN) return `https://${process.env.REPLIT_DEV_DOMAIN}`;
@@ -143,6 +149,58 @@ app.get('/proxy/dirseg', async (req, res) => {
     }
 });
 
+// MovieBox — resolve fresh CDN URL server-side, browser streams directly
+// The CDN blocks datacenter IPs; user's browser can access it directly
+const mbApi = require('./api/moviebox');
+
+function pickSource(sources, targetQ) {
+    return sources.find(s => s.quality === targetQ)
+        || sources.reduce((b, s) => Math.abs(s.quality - targetQ) < Math.abs(b.quality - targetQ) ? s : b, sources[0]);
+}
+function isStale(url) {
+    const t = url?.match(/[?&]t=(\d+)/)?.[1];
+    if (!t) return false;
+    return parseInt(t) < Math.floor(Date.now() / 1000) - 120; // older than 2 min
+}
+
+app.get('/resolve/mb', async (req, res) => {
+    const { subjectId, season, episode, quality } = req.query;
+    if (!subjectId) return res.status(400).json({ error: 'Missing subjectId' });
+    const targetQ = parseInt(quality) || 360;
+    try {
+        // First attempt
+        const srcData = season
+            ? await mbApi.getEpisodeSources(subjectId, parseInt(season), parseInt(episode))
+            : await mbApi.getSources(subjectId);
+        const sources = mbApi.parseSources(srcData);
+        if (!sources.length) return res.status(404).json({ error: 'Tidak ada sumber video tersedia' });
+        let chosen = pickSource(sources, targetQ);
+
+        // If URL looks stale (> 2 min old), try alternate param format to bust the cache
+        if (season && isStale(chosen.url)) {
+            console.warn('[resolve/mb] Stale URL detected, trying fresh variant...');
+            try {
+                const freshData = await mbApi.getEpisodeSourcesFresh(subjectId, parseInt(season), parseInt(episode));
+                const freshSources = mbApi.parseSources(freshData);
+                if (freshSources.length) {
+                    const freshChosen = pickSource(freshSources, targetQ);
+                    if (!isStale(freshChosen.url)) chosen = freshChosen;
+                }
+            } catch (retryErr) {
+                console.warn('[resolve/mb] Fresh variant failed:', retryErr.message);
+            }
+        }
+
+        res.set('Access-Control-Allow-Origin', '*');
+        const staleFlag = isStale(chosen.url);
+        if (staleFlag) console.warn('[resolve/mb] Serving potentially stale URL for', subjectId, season, episode);
+        res.json({ url: chosen.url, quality: chosen.quality, sizeMB: chosen.sizeMB, stale: staleFlag });
+    } catch (err) {
+        console.error('[resolve/mb]', err.message);
+        res.status(502).json({ error: err.message });
+    }
+});
+
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
 app.get('/favicon.ico', (req, res) => res.status(204).end());
 
@@ -213,9 +271,17 @@ function getMeloloPlayerUrl(mp4url, title, ep) {
     return `${base}/player?${params.toString()}`;
 }
 
-function getMbPlayerUrl(mp4url, title, quality) {
+// Player resolves fresh CDN URL at load time via /resolve/mb
+function getMbPlayerUrl(subjectId, quality, title, season, episode) {
     const base = getBaseUrl();
-    const params = new URLSearchParams({ url: mp4url, title: title || '', quality: String(quality || ''), platform: 'moviebox' });
+    const params = new URLSearchParams({
+        platform: 'moviebox',
+        subjectId: String(subjectId),
+        quality: String(quality || 360),
+        title: title || '',
+    });
+    if (season != null) params.set('season', String(season));
+    if (episode != null) params.set('episode', String(episode));
     return `${base}/player?${params.toString()}`;
 }
 
