@@ -201,6 +201,11 @@ app.get('/resolve/mb', async (req, res) => {
     }
 });
 
+app.get('/hls.js', (req, res) => {
+    res.set('Cache-Control', 'public, max-age=86400');
+    res.sendFile(path.join(__dirname, 'hls.min.js'));
+});
+
 app.get('/health', (req, res) => res.json({ status: 'ok' }));
 app.get('/favicon.ico', (req, res) => res.status(204).end());
 
