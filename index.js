@@ -6,9 +6,19 @@ const { trackCommand } = require('./src/stats');
 
 process.on('unhandledRejection', (reason) => {
     console.error('[UnhandledRejection]', reason?.message || reason);
+    // Do not crash — log and continue
 });
 process.on('uncaughtException', (err) => {
-    console.error('[UncaughtException]', err.message, err.stack);
+    console.error('[UncaughtException]', err.message);
+    // Do not crash — log and continue
+});
+process.on('exit', code => {
+    console.error('[EXIT] Process exiting with code', code);
+});
+process.on('SIGTERM', () => {
+    console.error('[SIGTERM] Received SIGTERM — restarting...');
+    // Let Replit restart us
+    process.exit(0);
 });
 
 // Keep event loop alive 24/7
