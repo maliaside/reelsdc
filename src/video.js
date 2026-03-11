@@ -89,6 +89,12 @@ async function downloadSubtitle(url) {
 }
 
 async function downloadFreeReelsEpisode(masterUrl, subtitleUrl = null, durationSec = null, quality = '360p') {
+    // Early duration check from metadata before fetching m3u8
+    if (durationSec && durationSec > MAX_ENCODE_DUR) {
+        console.log(`[video] FR dur=${Math.round(durationSec)}s > ${MAX_ENCODE_DUR}s → stream fallback`);
+        throw streamFallback(masterUrl, `Episode ${Math.round(durationSec)}s terlalu panjang untuk Discord. Gunakan streaming browser.`);
+    }
+
     const { videoUrl, audioUrl } = await parseFrMaster(masterUrl);
     const dur = durationSec || await getM3u8Duration(videoUrl, FR_HEADERS) || 120;
 
@@ -211,6 +217,13 @@ async function downloadSource(url, destPath, maxBytes, timeoutMs) {
 
 async function downloadMeloloEpisode(mp4Url, durationSec = null, quality = '360p') {
     const dur = durationSec || 120;
+
+    // Early check: episode too long for re-encoding, skip download entirely
+    if (dur > MAX_ENCODE_DUR) {
+        console.log(`[video] ML dur=${Math.round(dur)}s > ${MAX_ENCODE_DUR}s → stream fallback`);
+        throw streamFallback(mp4Url, `Episode ${Math.round(dur)}s terlalu panjang untuk Discord. Gunakan streaming browser.`);
+    }
+
     const src = path.join(os.tmpdir(), `ml_src_${Date.now()}.mp4`);
     const out = path.join(os.tmpdir(), `ml_out_${Date.now()}.mp4`);
 
