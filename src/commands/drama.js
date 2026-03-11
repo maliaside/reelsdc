@@ -597,7 +597,6 @@ async function showMbDetail(interaction, subjectId, userId) {
                 } else if (btn.customId === 'mbep') {
                     const epNum = parseInt(btn.values[0]);
                     col.stop('epSelected');
-                    await btn.deferUpdate();
                     await streamEpisode(btn, currentSe, epNum);
                 }
             } catch (err) {
