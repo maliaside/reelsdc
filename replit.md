@@ -1,6 +1,6 @@
 # NGEDRACIN Bot — Discord Bot 24/7
 
-Bot Discord 24/7 untuk menonton drama/film dari 4 platform: FreeReels, ReelShort, Melolo, dan MovieBox. Satu command `/drama` dengan subcommand. Video <8MB dikirim langsung ke Discord; lebih besar → browser stream link.
+Bot Discord 24/7 untuk menonton drama/film dari 5 platform: FreeReels, ReelShort, Melolo, MovieBox, dan NetShort. Satu command `/drama` dengan subcommand. Video <8MB dikirim langsung ke Discord; lebih besar → browser stream link.
 
 ## Struktur Project
 
@@ -12,6 +12,7 @@ src/
     freereels.js            # Wrapper API FreeReels (foryou, homepage, animepage, detail)
     reelshort.js            # Wrapper API ReelShort (foryou, search, detail, episode)
     melolo.js               # Wrapper API Melolo (forYou, search, detail, stream)
+    netshort.js             # Wrapper API NetShort (forYou, search → link ke netshort.com)
     moviebox.js             # Wrapper API MovieBox (trending, search, detail, sources)
   commands/
     drama.js                # Satu-satunya slash command: /drama
@@ -33,13 +34,17 @@ package.json
 | `/drama reelshort [offset]` | ReelShort For You |
 | `/drama melolo` | Melolo For You |
 | `/drama moviebox [page]` | MovieBox Trending |
+| `/drama netshort` | NetShort For You |
 
 ## Alur Menonton
 
-1. User pakai salah satu subcommand → daftar drama embed dengan tombol navigasi
-2. Klik **📋 Detail & Tonton** → detail + dropdown pilih episode
-3. Pilih episode → quality picker: 📱 360p Discord / 📺 720p Discord / 🌐 Browser
-4. Bot encode + kirim mp4 ke Discord (ephemeral), atau beri stream link jika >8MB / episode >150s
+1. User pakai `/drama cari <judul>` → pencarian paralel di semua 5 platform
+2. Jika ada hasil dari Dracin (FreeReels, ReelShort, Melolo, NetShort) DAN MovieBox → tombol kategori: 📱 Dracin / 🎬 Movie/Serial
+3. Exact title match diurutkan paling atas
+4. Klik **📋 Detail & Tonton** → detail + dropdown pilih episode
+5. Pilih episode → quality picker: 📱 360p Discord / 📺 720p Discord / 🌐 Browser
+6. Bot encode + kirim mp4 ke Discord (ephemeral), atau beri stream link jika >8MB / episode >150s
+7. NetShort: link langsung ke netshort.com (tanpa download/stream endpoint)
 
 ## Platform Details
 
@@ -61,6 +66,12 @@ package.json
 - Jika source < 8MB → kirim LANGSUNG tanpa encode (kualitas asli, super cepat)
 - Jika source > 8MB dan dur <= 150s → re-encode ke target bitrate
 - Jika dur > 150s → stream fallback otomatis
+
+### NetShort
+- API: sansekai.my.id/api/netshort (foryou + search saja, tanpa detail/stream endpoint)
+- Playback: link langsung ke netshort.com/id/drama/{libraryId}
+- Cover webp dikonversi via wsrv.nl → JPEG
+- Termasuk kategori "Dracin" di pencarian
 
 ### MovieBox
 - Video: MP4 dari bcdnxw.hakunaymatata.com (CDN blocks server IP, OK dari browser user)

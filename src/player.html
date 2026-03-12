@@ -155,7 +155,20 @@ if (plat === 'moviebox') {
     s.src = '/hls.js';
     s.onload = () => {
       if (Hls.isSupported()) {
-        const hls = new Hls({ autoStartLoad: false, maxBufferLength: 30 });
+        const hls = new Hls({
+          autoStartLoad: false,
+          maxBufferLength: 60,
+          maxMaxBufferLength: 120,
+          maxBufferSize: 60 * 1000 * 1000,
+          maxBufferHole: 0.5,
+          highBufferWatchdogPeriod: 3,
+          lowLatencyMode: false,
+          startLevel: -1,
+          fragLoadingTimeOut: 20000,
+          fragLoadingMaxRetry: 6,
+          levelLoadingTimeOut: 15000,
+          manifestLoadingTimeOut: 15000,
+        });
         hls.loadSource(src);
         hls.attachMedia(vid);
         hls.on(Hls.Events.MANIFEST_PARSED, () => markReady(`Tap ▶ · ${platLabel}`, false));
@@ -186,11 +199,14 @@ if (plat === 'moviebox') {
     s.onerror = () => setError('Gagal load player. Refresh halaman.');
     document.head.appendChild(s);
   } else {
-    // Direct MP4 — very simple
-    markReady(`Tap ▶ untuk tonton · ${platLabel}`, false);
+    vid.preload = 'auto';
+    vid.src = src;
+    vid.addEventListener('canplay', () => markReady(`Tap ▶ untuk tonton · ${platLabel}`, false), { once: true });
+    vid.addEventListener('loadedmetadata', () => {
+      if (!vid.readyState || vid.readyState < 3) markReady(`Tap ▶ untuk tonton · ${platLabel}`, false);
+    }, { once: true });
     btn.addEventListener('click', () => {
       hideOverlay();
-      vid.src = src;
       const p = vid.play();
       if (p) p.catch(()=>{ vid.load(); vid.play().catch(()=>{}); });
       badge.textContent = `${platLabel}${P.get('quality') ? ' · '+P.get('quality')+'p' : ''}`;

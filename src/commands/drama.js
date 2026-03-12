@@ -7,6 +7,7 @@ const {
 const frApi = require('../api/freereels');
 const rsApi = require('../api/reelshort');
 const mlApi = require('../api/melolo');
+const nsApi = require('../api/netshort');
 const { downloadFreeReelsEpisode, downloadReelShortEpisode, downloadMeloloEpisode, cleanup } = require('../video');
 const { getPlayerUrl, getDirectPlayerUrl, getMeloloPlayerUrl, getMbPlayerUrl } = require('../webserver');
 const { trackCommand } = require('../stats');
@@ -52,8 +53,8 @@ function mbExtract(data) {
 
 // ─── List embed builders ──────────────────────────────────────────────────────
 
-const COLORS = { freereels: 0x5865F2, reelshort: 0xEB459E, melolo: 0xFF6B35, moviebox: 0xFFC107 };
-const LABELS = { freereels: '🎭 FreeReels', reelshort: '🎬 ReelShort', melolo: '🎥 Melolo', moviebox: '🎬 MovieBox' };
+const COLORS = { freereels: 0x5865F2, reelshort: 0xEB459E, melolo: 0xFF6B35, moviebox: 0xFFC107, netshort: 0x00C9A7 };
+const LABELS = { freereels: '🎭 FreeReels', reelshort: '🎬 ReelShort', melolo: '🎥 Melolo', moviebox: '🎬 MovieBox', netshort: '📱 NetShort' };
 
 function buildListEmbed(item, idx, total, listTitle) {
     const tags = Array.isArray(item.tags) ? item.tags.map(t => typeof t === 'string' ? t : t?.name || '').filter(Boolean) : [];
@@ -692,6 +693,25 @@ async function showMbDetail(interaction, subjectId, userId) {
     }
 }
 
+// ─── NetShort ──────────────────────────────────────────────────────────────────
+
+async function showNsDetail(interaction, libraryId, userId) {
+    await interaction.deferReply({ flags: 64 });
+    try {
+        const playerUrl = nsApi.getPlayerUrl(libraryId);
+        const embed = new EmbedBuilder()
+            .setColor(COLORS.netshort)
+            .setTitle('📱 Tonton di NetShort')
+            .setDescription(`**[▶ Buka di NetShort Web Player](${playerUrl})**\n\nDrama ini akan dibuka langsung di situs NetShort.`)
+            .setFooter({ text: 'NetShort · Hanya kamu yang bisa lihat ini' });
+        await interaction.editReply({ embeds: [embed], components: [] });
+        trackCommand({ platform: 'netshort', user: interaction.user?.username || 'unknown', action: 'Tonton', title: libraryId, result: 'stream' });
+    } catch (err) {
+        console.error('[nsDetail]', err.message);
+        interaction.editReply({ content: `❌ Gagal: ${err.message}` }).catch(() => {});
+    }
+}
+
 // ─── Public list view ─────────────────────────────────────────────────────────
 
 async function showList(interaction, items, listTitle, userId, useFollowUp = false) {
@@ -721,6 +741,7 @@ async function showList(interaction, items, listTitle, userId, useFollowUp = fal
                 if (platform === 'reelshort') return showRsDetail(btn, key, userId);
                 if (platform === 'melolo') return showMlDetail(btn, key, userId);
                 if (platform === 'moviebox') return showMbDetail(btn, key, userId);
+                if (platform === 'netshort') return showNsDetail(btn, key, userId);
                 return;
             }
 
@@ -742,7 +763,7 @@ module.exports = {
     data: [
         new SlashCommandBuilder()
             .setName('drama')
-            .setDescription('Cari dan tonton drama + film dari FreeReels, ReelShort, Melolo & MovieBox')
+            .setDescription('Cari dan tonton drama + film dari FreeReels, ReelShort, Melolo, MovieBox & NetShort')
             .addSubcommand(sub =>
                 sub.setName('cari')
                     .setDescription('Cari drama/film di semua platform sekaligus')
@@ -766,6 +787,9 @@ module.exports = {
                     .setDescription('Browse film & series trending dari MovieBox')
                     .addIntegerOption(opt =>
                         opt.setName('page').setDescription('Halaman (default: 0)').setMinValue(0)))
+            .addSubcommand(sub =>
+                sub.setName('netshort')
+                    .setDescription('Browse drama For You dari NetShort'))
     ],
 
     async execute(interaction) {
@@ -779,50 +803,105 @@ module.exports = {
                 const judul = interaction.options.getString('judul');
                 await interaction.editReply({ content: `OK <@${userId}>, aku cari **${judul}**...` });
 
-                const allItems = [];
+                const dracin = [];
+                const movieSerial = [];
                 const seen = new Set();
 
-                // ReelShort
-                try {
-                    const rsData = await rsApi.search(judul, 1);
-                    for (const item of rsExtract(rsData)) {
-                        if (!seen.has(item.key)) { seen.add(item.key); allItems.push(item); }
-                    }
-                } catch (e) { console.warn('[drama/cari] RS:', e.message); }
+                const [rsRes, mlRes, nsRes, mbRes, frRes] = await Promise.allSettled([
+                    rsApi.search(judul, 1).catch(() => null),
+                    mlApi.search(judul).catch(() => null),
+                    nsApi.search(judul).catch(() => null),
+                    mbApi.search(judul).catch(() => null),
+                    (async () => {
+                        const keyword = judul.toLowerCase();
+                        const [homeData, fyData] = await Promise.all([
+                            frApi.getHomepage().catch(() => null),
+                            frApi.getForyou(0).catch(() => null),
+                        ]);
+                        return [...frExtract(homeData), ...frExtract(fyData)]
+                            .filter(i => i.title.toLowerCase().includes(keyword));
+                    })().catch(() => []),
+                ]);
 
-                // Melolo
-                try {
-                    const mlData = await mlApi.search(judul);
-                    const mlItems = mlApi.parseSearchItems(mlData);
-                    for (const item of mlItems) {
+                if (rsRes.status === 'fulfilled' && rsRes.value) {
+                    for (const item of rsExtract(rsRes.value)) {
+                        if (!seen.has(item.key)) { seen.add(item.key); dracin.push(item); }
+                    }
+                }
+                if (mlRes.status === 'fulfilled' && mlRes.value) {
+                    for (const item of mlApi.parseSearchItems(mlRes.value)) {
                         const k = `ml_${item.key}`;
-                        if (!seen.has(k)) { seen.add(k); allItems.push(item); }
+                        if (!seen.has(k)) { seen.add(k); dracin.push(item); }
                     }
-                } catch (e) { console.warn('[drama/cari] ML:', e.message); }
-
-                // MovieBox
-                try {
-                    const mbData = await mbApi.search(judul);
-                    for (const item of mbExtract(mbData)) {
-                        if (!seen.has(`mb_${item.key}`)) { seen.add(`mb_${item.key}`); allItems.push(item); }
+                }
+                if (nsRes.status === 'fulfilled' && nsRes.value) {
+                    for (const item of nsApi.parseSearchItems(nsRes.value)) {
+                        const k = `ns_${item.key}`;
+                        if (!seen.has(k)) { seen.add(k); dracin.push(item); }
                     }
-                } catch (e) { console.warn('[drama/cari] MB:', e.message); }
-
-                // FreeReels — browse + local filter
-                try {
-                    const keyword = judul.toLowerCase();
-                    const [homeData, fyData] = await Promise.all([
-                        frApi.getHomepage().catch(() => null),
-                        frApi.getForyou(0).catch(() => null),
-                    ]);
-                    const frItems = [...frExtract(homeData), ...frExtract(fyData)]
-                        .filter(i => i.title.toLowerCase().includes(keyword));
-                    for (const item of frItems) {
-                        if (!seen.has(`fr_${item.key}`)) { seen.add(`fr_${item.key}`); allItems.push(item); }
+                }
+                if (frRes.status === 'fulfilled' && frRes.value) {
+                    for (const item of (frRes.value || [])) {
+                        if (!seen.has(`fr_${item.key}`)) { seen.add(`fr_${item.key}`); dracin.push(item); }
                     }
-                } catch (e) { console.warn('[drama/cari] FR:', e.message); }
+                }
+                if (mbRes.status === 'fulfilled' && mbRes.value) {
+                    for (const item of mbExtract(mbRes.value)) {
+                        if (!seen.has(`mb_${item.key}`)) { seen.add(`mb_${item.key}`); movieSerial.push(item); }
+                    }
+                }
 
-                if (allItems.length === 0) return interaction.editReply({ content: `❌ Tidak ada hasil untuk **${judul}**.` });
+                function sortExactFirst(items, keyword) {
+                    const kw = keyword.toLowerCase();
+                    return items.sort((a, b) => {
+                        const aExact = a.title.toLowerCase() === kw ? 0 : 1;
+                        const bExact = b.title.toLowerCase() === kw ? 0 : 1;
+                        if (aExact !== bExact) return aExact - bExact;
+                        const aStarts = a.title.toLowerCase().startsWith(kw) ? 0 : 1;
+                        const bStarts = b.title.toLowerCase().startsWith(kw) ? 0 : 1;
+                        return aStarts - bStarts;
+                    });
+                }
+                sortExactFirst(dracin, judul);
+                sortExactFirst(movieSerial, judul);
+
+                if (dracin.length === 0 && movieSerial.length === 0) {
+                    return interaction.editReply({ content: `❌ Tidak ada hasil untuk **${judul}**.` });
+                }
+
+                if (dracin.length > 0 && movieSerial.length > 0) {
+                    const catId = `cat_${interaction.id}_${Date.now()}`;
+                    const catRow = new ActionRowBuilder().addComponents(
+                        new ButtonBuilder().setCustomId(`${catId}_dracin`).setLabel(`📱 Dracin (${dracin.length})`).setStyle(ButtonStyle.Primary),
+                        new ButtonBuilder().setCustomId(`${catId}_movie`).setLabel(`🎬 Movie / Serial (${movieSerial.length})`).setStyle(ButtonStyle.Secondary)
+                    );
+                    await interaction.editReply({
+                        content: `🔍 Hasil pencarian **${judul}** — pilih kategori:`,
+                        components: [catRow]
+                    });
+                    const catMsg = await interaction.fetchReply();
+                    const catCol = catMsg.createMessageComponentCollector({ time: 60_000, max: 1 });
+                    catCol.on('collect', async btn => {
+                        try {
+                            if (btn.user.id !== userId) return btn.reply({ content: '⛔ Bukan giliran kamu.', flags: 64 });
+                            await btn.deferUpdate();
+                            if (btn.customId.endsWith('_dracin')) {
+                                await showList(interaction, dracin, `📱 Dracin · "${judul}"`, userId);
+                            } else {
+                                await showList(interaction, movieSerial, `🎬 Movie / Serial · "${judul}"`, userId);
+                            }
+                        } catch (err) {
+                            if (err.code === 10062 || err.code === 40060) return;
+                            console.error('[cari/cat]', err.message);
+                        }
+                    });
+                    catCol.on('end', (_, reason) => {
+                        if (reason === 'time') interaction.editReply({ components: [] }).catch(() => {});
+                    });
+                    return;
+                }
+
+                const allItems = dracin.length > 0 ? dracin : movieSerial;
                 return showList(interaction, allItems, `🔍 Hasil: "${judul}"`, userId);
             }
 
@@ -859,6 +938,14 @@ module.exports = {
                 const items = mbExtract(data);
                 if (items.length === 0) return interaction.editReply({ content: '❌ Tidak ada konten ditemukan.' });
                 return showList(interaction, items, `🎬 MovieBox · Trending (halaman ${page})`, userId);
+            }
+
+            if (sub === 'netshort') {
+                await interaction.editReply({ content: '⏳ Memuat drama NetShort...' });
+                const data = await nsApi.getForYou();
+                const items = nsApi.parseForYouItems(data);
+                if (items.length === 0) return interaction.editReply({ content: '❌ Tidak ada drama ditemukan.' });
+                return showList(interaction, items, '📱 NetShort · For You', userId);
             }
         } catch (err) {
             console.error('[interactionCreate] drama:', err.message);
