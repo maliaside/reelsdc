@@ -66,7 +66,7 @@ function urlAge(url, now) {
 }
 
 function parseItems(data) {
-    const raw = data?.data?.items || data?.items || data?.list || [];
+    const raw = data?.subjectList || data?.data?.items || data?.items || data?.list || [];
     return raw.filter(i => i.subjectId).map(i => ({
         _source: 'moviebox',
         key: i.subjectId,
@@ -83,14 +83,24 @@ function parseItems(data) {
 }
 
 function parseSources(data) {
-    return (data?.processedSources || [])
+    const processed = (data?.processedSources || [])
         .filter(s => s.directUrl && s.quality)
-        .sort((a, b) => a.quality - b.quality)
         .map(s => ({
             quality: s.quality,
             url: s.directUrl,
             sizeMB: Math.round(parseInt(s.size || '0') / 1024 / 1024),
         }));
+    const downloads = (data?.downloads || [])
+        .filter(d => d.url && d.resolution)
+        .map(d => ({
+            quality: d.resolution,
+            url: d.url,
+            sizeMB: Math.round(parseInt(d.size || '0') / 1024 / 1024),
+        }));
+    const all = [...processed, ...downloads];
+    const seen = new Set();
+    return all.filter(s => { if (seen.has(s.quality)) return false; seen.add(s.quality); return true; })
+        .sort((a, b) => a.quality - b.quality);
 }
 
 module.exports = { getTrending, search, getDetail, getSources, getEpisodeSources, getEpisodeSourcesBest, parseItems, parseSources, urlAge };
