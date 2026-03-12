@@ -1,7 +1,11 @@
 const express = require('express');
 const path = require('path');
 const axios = require('axios');
+const https = require('https');
 const { getStats } = require('./stats');
+
+// Agent khusus untuk CDN yang punya rantai sertifikat tidak lengkap (misal NetShort)
+const relaxedHttpsAgent = new https.Agent({ rejectUnauthorized: false });
 
 let _botClient = null;
 function setBotClient(client) { _botClient = client; }
@@ -149,6 +153,47 @@ app.get('/proxy/dirseg', async (req, res) => {
     }
 });
 
+// Proxy MP4 langsung — untuk CDN yang punya CORS/SSL issue di browser (NetShort)
+// Mendukung Range requests agar seeking di browser bisa bekerja
+app.get('/proxy/mp4', async (req, res) => {
+    const { url } = req.query;
+    if (!url) return res.status(400).send('Missing url');
+
+    const decodedUrl = decodeURIComponent(url);
+    const rangeHeader = req.headers['range'];
+
+    try {
+        const fetchHeaders = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36',
+        };
+        if (rangeHeader) fetchHeaders['Range'] = rangeHeader;
+
+        const upstream = await axios.get(decodedUrl, {
+            headers: fetchHeaders,
+            responseType: 'stream',
+            httpsAgent: relaxedHttpsAgent,
+            timeout: 30000,
+        });
+
+        const status = upstream.status === 206 ? 206 : 200;
+        const headers = {
+            'Content-Type': upstream.headers['content-type'] || 'video/mp4',
+            'Accept-Ranges': 'bytes',
+            'Access-Control-Allow-Origin': '*',
+            'Cache-Control': 'public, max-age=600',
+        };
+        if (upstream.headers['content-length']) headers['Content-Length'] = upstream.headers['content-length'];
+        if (upstream.headers['content-range'])  headers['Content-Range']  = upstream.headers['content-range'];
+
+        res.writeHead(status, headers);
+        upstream.data.pipe(res);
+        upstream.data.on('error', () => res.end());
+    } catch (err) {
+        console.error('[proxy/mp4]', err.message);
+        if (!res.headersSent) res.status(502).send('Proxy error: ' + err.message);
+    }
+});
+
 // MovieBox — resolve fresh CDN URL server-side, browser streams directly
 // The CDN blocks datacenter IPs; user's browser can access it directly
 const mbApi = require('./api/moviebox');
@@ -252,6 +297,14 @@ function getMeloloPlayerUrl(mp4url, title, ep) {
     return `${base}/player?${params.toString()}`;
 }
 
+function getNsPlayerUrl(mp4url, title, ep) {
+    const base = getBaseUrl();
+    // Proxy melalui server untuk atasi CORS + SSL issue pada CDN NetShort
+    const proxied = `${base}/proxy/mp4?url=${encodeURIComponent(mp4url)}`;
+    const params = new URLSearchParams({ url: proxied, title: title || '', ep: String(ep || ''), platform: 'netshort' });
+    return `${base}/player?${params.toString()}`;
+}
+
 // Player resolves fresh CDN URL at load time via /resolve/mb
 // Returns h5.aoneroom.com URL directly — CDN serves video correctly from that domain.
 // Our player page can't set Referer: https://h5.aoneroom.com which the CDN requires.
@@ -261,4 +314,4 @@ function getMbPlayerUrl(subjectId, quality, title, season, episode) {
     return url;
 }
 
-module.exports = { startWebServer, setBotClient, getPlayerUrl, getDirectPlayerUrl, getMeloloPlayerUrl, getMbPlayerUrl };
+module.exports = { startWebServer, setBotClient, getPlayerUrl, getDirectPlayerUrl, getMeloloPlayerUrl, getNsPlayerUrl, getMbPlayerUrl };

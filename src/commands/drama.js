@@ -8,8 +8,8 @@ const frApi = require('../api/freereels');
 const rsApi = require('../api/reelshort');
 const mlApi = require('../api/melolo');
 const nsApi = require('../api/netshort');
-const { downloadFreeReelsEpisode, downloadReelShortEpisode, downloadMeloloEpisode, cleanup } = require('../video');
-const { getPlayerUrl, getDirectPlayerUrl, getMeloloPlayerUrl, getMbPlayerUrl } = require('../webserver');
+const { downloadFreeReelsEpisode, downloadReelShortEpisode, downloadMeloloEpisode, downloadNetShortEpisode, headCheckSize, cleanup } = require('../video');
+const { getPlayerUrl, getDirectPlayerUrl, getMeloloPlayerUrl, getNsPlayerUrl, getMbPlayerUrl } = require('../webserver');
 const { trackCommand } = require('../stats');
 const mbApi = require('../api/moviebox');
 
@@ -183,6 +183,7 @@ async function sendStreamLink(q, streamUrl, title, epNum, platform, extraRows = 
     let playerUrl;
     if (platform === 'freereels') playerUrl = getPlayerUrl(streamUrl, title, epNum);
     else if (platform === 'reelshort') playerUrl = getDirectPlayerUrl(streamUrl, title, epNum);
+    else if (platform === 'netshort') playerUrl = getNsPlayerUrl(streamUrl, title, epNum);
     else playerUrl = getMeloloPlayerUrl(streamUrl, title, epNum);
 
     const embed = new EmbedBuilder()
@@ -695,17 +696,93 @@ async function showMbDetail(interaction, subjectId, userId) {
 
 // ─── NetShort ──────────────────────────────────────────────────────────────────
 
-async function showNsDetail(interaction, libraryId, userId) {
+async function showNsDetail(interaction, shortPlayId, userId) {
     await interaction.deferReply({ flags: 64 });
     try {
-        const playerUrl = nsApi.getPlayerUrl(libraryId);
+        const raw = await nsApi.getAllEpisodes(shortPlayId);
+        const detail = nsApi.parseAllEpisodes(raw);
+        if (!detail || !detail.title) return interaction.editReply({ content: '❌ Detail tidak ditemukan.' });
+
+        const episodes = detail.episodes.map((ep, i) => ({ ...ep, label: ep.label, _idx: i }));
+        const title = detail.title;
+
         const embed = new EmbedBuilder()
             .setColor(COLORS.netshort)
-            .setTitle('📱 Tonton di NetShort')
-            .setDescription(`**[▶ Buka di NetShort Web Player](${playerUrl})**\n\nDrama ini akan dibuka langsung di situs NetShort.`)
-            .setFooter({ text: 'NetShort · Hanya kamu yang bisa lihat ini' });
-        await interaction.editReply({ embeds: [embed], components: [] });
-        trackCommand({ platform: 'netshort', user: interaction.user?.username || 'unknown', action: 'Tonton', title: libraryId, result: 'stream' });
+            .setTitle(title.slice(0, 256))
+            .setAuthor({ name: '📱 NetShort · Detail Drama' })
+            .setFooter({ text: `Pilih episode · Hanya kamu yang melihat ini${detail.freeEpisodes ? ` · ${detail.freeEpisodes} ep gratis` : ''}` });
+        if (detail.cover) embed.setImage(detail.cover);
+        if (detail.desc) embed.setDescription(detail.desc.slice(0, 400));
+        if (detail.totalEpisode) embed.addFields({ name: '📺 Total Episode', value: String(detail.totalEpisode), inline: true });
+        if (detail.isFinish !== undefined) embed.addFields({ name: '📌 Status', value: detail.isFinish ? 'Tamat' : 'On-Going', inline: true });
+
+        const cid = `nsdet_${shortPlayId}_${interaction.id}`;
+        const rows = episodes.length > 0 ? buildEpisodeSelect(episodes, 0, `${cid}_sel`, `${cid}_nav`) : [];
+        await interaction.editReply({ embeds: [embed], components: rows });
+        if (episodes.length === 0) return;
+
+        async function processNsEp(target, epIdx) {
+            const ep = episodes[epIdx];
+            if (!ep) return;
+            const epNum = ep.episodeNo;
+            const hasNext = epIdx + 1 < episodes.length;
+            const mp4Url = ep.playVoucher;
+
+            if (!mp4Url) return target.editReply({ content: '❌ URL video tidak tersedia.', components: [] });
+
+            await target.editReply({ content: `⏳ Memeriksa EPISODE ${epNum}...`, components: [] });
+
+            // HEAD check dulu — kalau sudah > 8MB, langsung beri link stream tanpa download
+            const knownSize = await headCheckSize(mp4Url);
+            const MAX_DISCORD = 8 * 1024 * 1024;
+            if (knownSize !== null && knownSize > MAX_DISCORD) {
+                await sendStreamLink(target, mp4Url, title, epNum, 'netshort');
+                if (hasNext) await attachNextEpBtn(target, epIdx + 2, userId, btn => processNsEp(btn, epIdx + 1));
+                return;
+            }
+
+            // Ukuran oke atau tidak diketahui — coba download langsung ke Discord
+            let filePath = null;
+            try {
+                await target.editReply({ content: `⏳ Mengunduh EPISODE ${epNum}...`, components: [] });
+                const res = await downloadNetShortEpisode(mp4Url);
+                filePath = res.filePath;
+                await sendVideoFile(target, filePath, res.sizeBytes, title, epNum, 'netshort', 'original');
+                if (hasNext) await attachNextEpBtn(target, epIdx + 2, userId, btn => processNsEp(btn, epIdx + 1));
+            } catch (err) {
+                if (err.streamFallback && err.streamUrl) {
+                    await sendStreamLink(target, err.streamUrl, title, epNum, 'netshort');
+                    if (hasNext) await attachNextEpBtn(target, epIdx + 2, userId, btn => processNsEp(btn, epIdx + 1));
+                    return;
+                }
+                await target.editReply({ content: `❌ Gagal: ${err.message}`, files: [], components: [] }).catch(() => {});
+            } finally { if (filePath) cleanup(filePath); }
+        }
+
+        const msg = await interaction.fetchReply();
+        let page = 0;
+        const col = msg.createMessageComponentCollector({ time: 300_000 });
+        col.on('collect', async c => {
+            try {
+                if (c.user.id !== userId) return c.reply({ content: '⛔ Hanya kamu yang bisa memilih.', flags: 64 });
+                if (c.isStringSelectMenu()) {
+                    const epIdx = parseInt(c.values[0]);
+                    const ep = episodes[epIdx];
+                    if (!ep) return;
+                    if (ep.locked) return c.reply({ content: '🔒 Episode ini terkunci (berbayar).', flags: 64 });
+                    await c.deferReply({ flags: 64 });
+                    await processNsEp(c, epIdx);
+                } else if (c.isButton()) {
+                    if (c.customId.includes('_nav_next_')) { page++; await c.update({ embeds: [embed], components: buildEpisodeSelect(episodes, page, `${cid}_sel`, `${cid}_nav`) }); }
+                    else if (c.customId.includes('_nav_prev_')) { page--; await c.update({ embeds: [embed], components: buildEpisodeSelect(episodes, page, `${cid}_sel`, `${cid}_nav`) }); }
+                }
+            } catch (err) {
+                if (err.code === 10062 || err.code === 40060) return;
+                console.error('[nsDetail collect]', err.message);
+            }
+        });
+        col.on('end', () => {});
+        trackCommand({ platform: 'netshort', user: interaction.user?.username || 'unknown', action: 'Detail', title, result: 'ok' });
     } catch (err) {
         console.error('[nsDetail]', err.message);
         interaction.editReply({ content: `❌ Gagal: ${err.message}` }).catch(() => {});
@@ -801,31 +878,39 @@ module.exports = {
         try {
             if (sub === 'cari') {
                 const judul = interaction.options.getString('judul');
-                await interaction.editReply({ content: `OK <@${userId}>, aku cari **${judul}**...` });
+                await interaction.editReply({ content: `🔍 Mencari **${judul}** di semua platform...` });
 
+                // Dracin = ReelShort + Melolo + NetShort + FreeReels
+                // Movie  = MovieBox
                 const dracin = [];
-                const movieSerial = [];
-                const seen = new Set();
+                const movie  = [];
+                const seen   = new Set();
 
                 const [rsRes, mlRes, nsRes, mbRes, frRes] = await Promise.allSettled([
                     rsApi.search(judul, 1).catch(() => null),
                     mlApi.search(judul).catch(() => null),
                     nsApi.search(judul).catch(() => null),
                     mbApi.search(judul).catch(() => null),
+                    // FreeReels search API tidak mengembalikan item — filter dari foryou+homepage
                     (async () => {
-                        const keyword = judul.toLowerCase();
+                        const kw = judul.toLowerCase();
+                        const qWords = kw.split(/\s+/).filter(w => w.length > 2);
                         const [homeData, fyData] = await Promise.all([
                             frApi.getHomepage().catch(() => null),
                             frApi.getForyou(0).catch(() => null),
                         ]);
                         return [...frExtract(homeData), ...frExtract(fyData)]
-                            .filter(i => i.title.toLowerCase().includes(keyword));
+                            .filter(i => {
+                                const t = i.title.toLowerCase();
+                                return t.includes(kw) || qWords.some(w => t.includes(w));
+                            });
                     })().catch(() => []),
                 ]);
 
                 if (rsRes.status === 'fulfilled' && rsRes.value) {
                     for (const item of rsExtract(rsRes.value)) {
-                        if (!seen.has(item.key)) { seen.add(item.key); dracin.push(item); }
+                        const k = `rs_${item.key}`;
+                        if (!seen.has(k)) { seen.add(k); dracin.push(item); }
                     }
                 }
                 if (mlRes.status === 'fulfilled' && mlRes.value) {
@@ -840,69 +925,80 @@ module.exports = {
                         if (!seen.has(k)) { seen.add(k); dracin.push(item); }
                     }
                 }
-                if (frRes.status === 'fulfilled' && frRes.value) {
-                    for (const item of (frRes.value || [])) {
-                        if (!seen.has(`fr_${item.key}`)) { seen.add(`fr_${item.key}`); dracin.push(item); }
+                if (frRes.status === 'fulfilled' && Array.isArray(frRes.value)) {
+                    for (const item of frRes.value) {
+                        const k = `fr_${item.key}`;
+                        if (!seen.has(k)) { seen.add(k); dracin.push(item); }
                     }
                 }
                 if (mbRes.status === 'fulfilled' && mbRes.value) {
                     for (const item of mbExtract(mbRes.value)) {
-                        if (!seen.has(`mb_${item.key}`)) { seen.add(`mb_${item.key}`); movieSerial.push(item); }
+                        const k = `mb_${item.key}`;
+                        if (!seen.has(k)) { seen.add(k); movie.push(item); }
                     }
                 }
 
-                function sortExactFirst(items, keyword) {
-                    const kw = keyword.toLowerCase();
-                    return items.sort((a, b) => {
-                        const aExact = a.title.toLowerCase() === kw ? 0 : 1;
-                        const bExact = b.title.toLowerCase() === kw ? 0 : 1;
-                        if (aExact !== bExact) return aExact - bExact;
-                        const aStarts = a.title.toLowerCase().startsWith(kw) ? 0 : 1;
-                        const bStarts = b.title.toLowerCase().startsWith(kw) ? 0 : 1;
-                        return aStarts - bStarts;
-                    });
+                // Relevansi berdasarkan overlap kata — berlaku untuk SEMUA platform
+                function relevanceScore(title, query) {
+                    const t = title.toLowerCase();
+                    const q = query.toLowerCase();
+                    if (t === q) return 100;
+                    if (t.startsWith(q)) return 90;
+                    if (t.includes(q)) return 80;
+                    const qWords = q.split(/\s+/).filter(w => w.length > 1);
+                    if (!qWords.length) return 0;
+                    const matched = qWords.filter(w => t.includes(w)).length;
+                    return Math.round((matched / qWords.length) * 70);
                 }
-                sortExactFirst(dracin, judul);
-                sortExactFirst(movieSerial, judul);
+                function sortByRelevance(items) {
+                    return items
+                        .map(i => ({ ...i, _score: relevanceScore(i.title, judul) }))
+                        .sort((a, b) => b._score - a._score);
+                }
 
-                if (dracin.length === 0 && movieSerial.length === 0) {
+                const sortedDracin = sortByRelevance(dracin);
+                const sortedMovie  = sortByRelevance(movie);
+                const total = sortedDracin.length + sortedMovie.length;
+
+                if (total === 0) {
                     return interaction.editReply({ content: `❌ Tidak ada hasil untuk **${judul}**.` });
                 }
 
-                if (dracin.length > 0 && movieSerial.length > 0) {
-                    const catId = `cat_${interaction.id}_${Date.now()}`;
-                    const catRow = new ActionRowBuilder().addComponents(
-                        new ButtonBuilder().setCustomId(`${catId}_dracin`).setLabel(`📱 Dracin (${dracin.length})`).setStyle(ButtonStyle.Primary),
-                        new ButtonBuilder().setCustomId(`${catId}_movie`).setLabel(`🎬 Movie / Serial (${movieSerial.length})`).setStyle(ButtonStyle.Secondary)
-                    );
-                    await interaction.editReply({
-                        content: `🔍 Hasil pencarian **${judul}** — pilih kategori:`,
-                        components: [catRow]
-                    });
-                    const catMsg = await interaction.fetchReply();
-                    const catCol = catMsg.createMessageComponentCollector({ time: 60_000, max: 1 });
-                    catCol.on('collect', async btn => {
-                        try {
-                            if (btn.user.id !== userId) return btn.reply({ content: '⛔ Bukan giliran kamu.', flags: 64 });
-                            await btn.deferUpdate();
-                            if (btn.customId.endsWith('_dracin')) {
-                                await showList(interaction, dracin, `📱 Dracin · "${judul}"`, userId);
-                            } else {
-                                await showList(interaction, movieSerial, `🎬 Movie / Serial · "${judul}"`, userId);
-                            }
-                        } catch (err) {
-                            if (err.code === 10062 || err.code === 40060) return;
-                            console.error('[cari/cat]', err.message);
-                        }
-                    });
-                    catCol.on('end', (_, reason) => {
-                        if (reason === 'time') interaction.editReply({ components: [] }).catch(() => {});
-                    });
-                    return;
-                }
+                // Kalau hanya satu rak yang ada hasil, langsung tampilkan tanpa tombol
+                if (sortedDracin.length === 0)
+                    return showList(interaction, sortedMovie, `🎬 Movie & Drama Serial · "${judul}"`, userId);
+                if (sortedMovie.length === 0)
+                    return showList(interaction, sortedDracin, `🀄 Dracin · "${judul}"`, userId);
 
-                const allItems = dracin.length > 0 ? dracin : movieSerial;
-                return showList(interaction, allItems, `🔍 Hasil: "${judul}"`, userId);
+                // Dua rak ada hasil — tampilkan tombol pilihan
+                const catId = `cat_${interaction.id}_${Date.now()}`;
+                const catRow = new ActionRowBuilder().addComponents(
+                    new ButtonBuilder().setCustomId(`${catId}_dracin`).setLabel(`🀄 Dracin (${sortedDracin.length})`).setStyle(ButtonStyle.Primary),
+                    new ButtonBuilder().setCustomId(`${catId}_movie`).setLabel(`🎬 Movie & Drama Serial (${sortedMovie.length})`).setStyle(ButtonStyle.Secondary)
+                );
+                await interaction.editReply({
+                    content: `✅ Ditemukan **${total} hasil** untuk **"${judul}"** — pilih rak:`,
+                    components: [catRow]
+                });
+                const catMsg = await interaction.fetchReply();
+                const catCol = catMsg.createMessageComponentCollector({ time: 120_000 });
+                catCol.on('collect', async btn => {
+                    try {
+                        if (btn.user.id !== userId) return btn.reply({ content: '⛔ Bukan giliran kamu.', flags: 64 });
+                        await btn.deferUpdate();
+                        if (btn.customId.endsWith('_dracin'))
+                            await showList(interaction, sortedDracin, `🀄 Dracin · "${judul}"`, userId);
+                        else if (btn.customId.endsWith('_movie'))
+                            await showList(interaction, sortedMovie, `🎬 Movie & Drama Serial · "${judul}"`, userId);
+                    } catch (err) {
+                        if (err.code === 10062 || err.code === 40060) return;
+                        console.error('[cari/cat]', err.message);
+                    }
+                });
+                catCol.on('end', (_, reason) => {
+                    if (reason === 'time') interaction.editReply({ components: [] }).catch(() => {});
+                });
+                return;
             }
 
             if (sub === 'foryou') {

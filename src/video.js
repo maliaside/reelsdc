@@ -4,6 +4,10 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const axios = require('axios');
+const https = require('https');
+
+// Untuk CDN yang punya rantai sertifikat tidak lengkap (NetShort awscdn)
+const relaxedHttpsAgent = new https.Agent({ rejectUnauthorized: false });
 
 const execFileAsync = promisify(execFile);
 
@@ -184,7 +188,7 @@ async function downloadReelShortEpisode(m3u8Url, quality = '360p') {
 
 // ─── Melolo (direct MP4 from TikTok CDN) ─────────────────────────────────────
 
-async function downloadSource(url, destPath, maxBytes, timeoutMs) {
+async function downloadSource(url, destPath, maxBytes, timeoutMs, extraAxiosOpts = {}) {
     return new Promise((resolve, reject) => {
         const kill = setTimeout(() => {
             removeTmp(destPath);
@@ -196,7 +200,8 @@ async function downloadSource(url, destPath, maxBytes, timeoutMs) {
             timeout: timeoutMs + 5000,
             headers: {
                 'User-Agent': 'Mozilla/5.0 (Linux; Android 13; SM-G991B) AppleWebKit/537.36 Chrome/120.0.6099.230 Mobile Safari/537.36',
-            }
+            },
+            ...extraAxiosOpts,
         }).then(res => {
             const writer = fs.createWriteStream(destPath);
             let bytes = 0;
@@ -213,6 +218,45 @@ async function downloadSource(url, destPath, maxBytes, timeoutMs) {
             res.data.on('error', e => { clearTimeout(kill); removeTmp(destPath); reject(e); });
         }).catch(e => { clearTimeout(kill); removeTmp(destPath); reject(e); });
     });
+}
+
+async function headCheckSize(url) {
+    try {
+        const isNs = url.includes('awscdn.netshort') || url.includes('netshort');
+        const res = await axios.head(url, {
+            timeout: 8000,
+            headers: { 'User-Agent': 'Mozilla/5.0 (Linux; Android 13; SM-G991B) AppleWebKit/537.36 Chrome/120.0.6099.230 Mobile Safari/537.36' },
+            ...(isNs ? { httpsAgent: relaxedHttpsAgent } : {}),
+        });
+        const len = parseInt(res.headers['content-length'] || '0', 10);
+        return len > 0 ? len : null;
+    } catch (_) {
+        return null;
+    }
+}
+
+async function downloadNetShortEpisode(mp4Url) {
+    const src = path.join(os.tmpdir(), `ns_src_${Date.now()}.mp4`);
+    console.log(`[video] NS downloading...`);
+
+    let srcBytes;
+    try {
+        srcBytes = await downloadSource(mp4Url, src, MAX_BYTES + 1, 60 * 1000, { httpsAgent: relaxedHttpsAgent });
+        console.log(`[video] NS downloaded ${Math.round(srcBytes / 1024)}KB`);
+    } catch (e) {
+        console.warn('[video] NS download failed:', e.message);
+        throw streamFallback(mp4Url, e.message === 'source_too_large'
+            ? 'Video > 8MB, gunakan link streaming.'
+            : 'Download gagal. Coba link streaming.');
+    }
+
+    if (srcBytes <= MAX_BYTES) {
+        console.log(`[video] NS fits Discord — kirim langsung`);
+        return { filePath: src, sizeBytes: srcBytes };
+    }
+
+    removeTmp(src);
+    throw streamFallback(mp4Url, 'Video > 8MB, gunakan link streaming.');
 }
 
 async function downloadMeloloEpisode(mp4Url, durationSec = null, quality = '360p') {
@@ -282,4 +326,4 @@ async function downloadMeloloEpisode(mp4Url, durationSec = null, quality = '360p
 
 function cleanup(filePath) { removeTmp(filePath); }
 
-module.exports = { downloadFreeReelsEpisode, downloadReelShortEpisode, downloadMeloloEpisode, cleanup };
+module.exports = { downloadFreeReelsEpisode, downloadReelShortEpisode, downloadMeloloEpisode, downloadNetShortEpisode, headCheckSize, cleanup };
