@@ -1,19 +1,20 @@
 const client = require('./client');
 
 const BASE_URL = 'https://api.sansekai.my.id/api/netshort';
+const LANG = { language: 'id' };
 
 async function getForYou() {
-    const res = await client.get(`${BASE_URL}/foryou`);
+    const res = await client.get(`${BASE_URL}/foryou`, { params: { ...LANG } });
     return res.data;
 }
 
 async function search(query) {
-    const res = await client.get(`${BASE_URL}/search`, { params: { query } });
+    const res = await client.get(`${BASE_URL}/search`, { params: { query, ...LANG } });
     return res.data;
 }
 
 async function getAllEpisodes(shortPlayId) {
-    const res = await client.get(`${BASE_URL}/allepisode`, { params: { shortPlayId } });
+    const res = await client.get(`${BASE_URL}/allepisode`, { params: { shortPlayId, ...LANG } });
     return res.data;
 }
 
@@ -25,33 +26,72 @@ function _fixCover(url) {
     return url;
 }
 
+// Hapus karakter non-latin (China/Korea/Jepang)
+function _isIndonesian(title) {
+    if (!title) return false;
+    return !/[\u3000-\u9FFF\uAC00-\uD7AF\u3040-\u30FF]/.test(title);
+}
+
+// Cek apakah judul adalah versi sulih suara (dubbed Indo)
+function _isSulihSuara(title) {
+    return /\(sulih suara\)/i.test(title);
+}
+
+// Ambil judul dasar (tanpa prefix sulih suara dan tag HTML)
+function _baseTitle(title) {
+    return title
+        .replace(/<\/?em>/g, '')
+        .replace(/\(sulih suara\)\s*/i, '')
+        .trim()
+        .toLowerCase();
+}
+
+// Jika ada versi sulih suara & versi original untuk judul yang sama,
+// buang versi original — tampilkan hanya sulih suara.
+// Jika tidak ada sulih suara, tampilkan original (kemungkinan konten asli Indo).
+function _preferSulihSuara(items) {
+    const sulihTitles = new Set(
+        items.filter(i => _isSulihSuara(i.title)).map(i => _baseTitle(i.title))
+    );
+    return items.filter(i => {
+        if (_isSulihSuara(i.title)) return true;        // selalu tampil
+        return !sulihTitles.has(_baseTitle(i.title));   // original hanya jika tidak ada sulih suara
+    });
+}
+
 function parseForYouItems(raw) {
     const items = raw?.contentInfos || [];
-    return items.map(i => ({
-        _source: 'netshort',
-        key: i.shortPlayId || i.shortPlayLibraryId || '',
-        title: i.shortPlayName || '',
-        cover: _fixCover(i.shortPlayCover),
-        desc: '',
-        tags: i.labelArray || [],
-        episodes: null,
-        popularity: i.heatScoreShow || null,
-    })).filter(i => i.key);
+    const mapped = items
+        .filter(i => _isIndonesian(i.shortPlayName))
+        .map(i => ({
+            _source: 'netshort',
+            key: i.shortPlayId || i.shortPlayLibraryId || '',
+            title: i.shortPlayName || '',
+            cover: _fixCover(i.shortPlayCover),
+            desc: '',
+            tags: i.labelArray || [],
+            episodes: null,
+            popularity: i.heatScoreShow || null,
+        })).filter(i => i.key);
+    return _preferSulihSuara(mapped);
 }
 
 function parseSearchItems(raw) {
     const results = raw?.searchCodeSearchResult || raw?.simpleSearchResult || [];
-    return results.map(i => ({
-        _source: 'netshort',
-        key: i.shortPlayId || i.shortPlayLibraryId || '',
-        title: (i.shortPlayName || '').replace(/<\/?em>/g, ''),
-        cover: _fixCover(i.shortPlayCover),
-        desc: i.shotIntroduce || '',
-        tags: i.labelNameList || [],
-        episodes: null,
-        popularity: i.formatHeatScore || i.heatScore || null,
-        actors: (i.actorList || []).slice(0, 3).map(a => a.name).filter(Boolean),
-    })).filter(i => i.key);
+    const mapped = results
+        .filter(i => _isIndonesian(i.shortPlayName))
+        .map(i => ({
+            _source: 'netshort',
+            key: i.shortPlayId || i.shortPlayLibraryId || '',
+            title: (i.shortPlayName || '').replace(/<\/?em>/g, ''),
+            cover: _fixCover(i.shortPlayCover),
+            desc: i.shotIntroduce || '',
+            tags: i.labelNameList || [],
+            episodes: null,
+            popularity: i.formatHeatScore || i.heatScore || null,
+            actors: (i.actorList || []).slice(0, 3).map(a => a.name).filter(Boolean),
+        })).filter(i => i.key);
+    return _preferSulihSuara(mapped);
 }
 
 function parseAllEpisodes(raw) {
