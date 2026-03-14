@@ -123,7 +123,7 @@ async function showQualityPicker(c, userId, epLabel, callback) {
         components: [buildQualityRow(qCustomId)]
     });
     const qMsg = await c.fetchReply();
-    const qCol = qMsg.createMessageComponentCollector({ time: 60_000, max: 1 });
+    const qCol = qMsg.createMessageComponentCollector({ time: 120_000, max: 1 });
 
     qCol.on('collect', async q => {
         try {
@@ -179,11 +179,11 @@ async function attachNextEpBtn(interaction, nextEpNum, userId, onNext) {
 
 // ─── Stream link sender ───────────────────────────────────────────────────────
 
-async function sendStreamLink(q, streamUrl, title, epNum, platform, extraRows = []) {
+async function sendStreamLink(q, streamUrl, title, epNum, platform, extraRows = [], opts = {}) {
     let playerUrl;
     if (platform === 'freereels') playerUrl = getPlayerUrl(streamUrl, title, epNum);
     else if (platform === 'reelshort') playerUrl = getDirectPlayerUrl(streamUrl, title, epNum);
-    else if (platform === 'netshort') playerUrl = getNsPlayerUrl(streamUrl, title, epNum);
+    else if (platform === 'netshort') playerUrl = getNsPlayerUrl(opts.shortPlayId || '', epNum, title, epNum);
     else playerUrl = getMeloloPlayerUrl(streamUrl, title, epNum);
 
     const embed = new EmbedBuilder()
@@ -277,7 +277,7 @@ async function showFrDetail(interaction, key, userId) {
 
         const msg = await interaction.fetchReply();
         let page = 0;
-        const col = msg.createMessageComponentCollector({ time: 300_000 });
+        const col = msg.createMessageComponentCollector({ time: 600_000 });
         col.on('collect', async c => {
             try {
                 if (c.user.id !== userId) return c.reply({ content: '⛔ Hanya kamu yang bisa memilih.', flags: 64 });
@@ -390,7 +390,7 @@ async function showRsDetail(interaction, bookId, userId) {
 
         const msg = await interaction.fetchReply();
         let page = 0;
-        const col = msg.createMessageComponentCollector({ time: 300_000 });
+        const col = msg.createMessageComponentCollector({ time: 600_000 });
         col.on('collect', async c => {
             try {
                 if (c.user.id !== userId) return c.reply({ content: '⛔ Hanya kamu yang bisa memilih.', flags: 64 });
@@ -493,7 +493,7 @@ async function showMlDetail(interaction, bookId, userId) {
 
         const msg = await interaction.fetchReply();
         let page = 0;
-        const col = msg.createMessageComponentCollector({ time: 300_000 });
+        const col = msg.createMessageComponentCollector({ time: 600_000 });
         col.on('collect', async c => {
             try {
                 if (c.user.id !== userId) return c.reply({ content: '⛔ Hanya kamu yang bisa memilih.', flags: 64 });
@@ -585,7 +585,7 @@ async function showMbDetail(interaction, subjectId, userId) {
             );
             await interaction.editReply({ embeds: [embed], components: [watchRow] });
             const msg = await interaction.fetchReply();
-            const qcol = msg.createMessageComponentCollector({ time: 120_000 });
+            const qcol = msg.createMessageComponentCollector({ time: 300_000 });
             qcol.on('collect', async q => {
                 try {
                     if (q.user.id !== userId) return q.reply({ content: '⛔ Bukan giliranmu.', flags: 64 });
@@ -657,7 +657,7 @@ async function showMbDetail(interaction, subjectId, userId) {
 
         await renderEpisodePicker(interaction);
         const msg = await interaction.fetchReply();
-        const col = msg.createMessageComponentCollector({ time: 300_000 });
+        const col = msg.createMessageComponentCollector({ time: 600_000 });
 
         col.on('collect', async btn => {
             try {
@@ -732,11 +732,13 @@ async function showNsDetail(interaction, shortPlayId, userId) {
 
             await target.editReply({ content: `⏳ Memeriksa EPISODE ${epNum}...`, components: [] });
 
+            const nsOpts = { shortPlayId };
+
             // HEAD check dulu — kalau sudah > 8MB, langsung beri link stream tanpa download
             const knownSize = await headCheckSize(mp4Url);
             const MAX_DISCORD = 8 * 1024 * 1024;
             if (knownSize !== null && knownSize > MAX_DISCORD) {
-                await sendStreamLink(target, mp4Url, title, epNum, 'netshort');
+                await sendStreamLink(target, mp4Url, title, epNum, 'netshort', [], nsOpts);
                 if (hasNext) await attachNextEpBtn(target, epIdx + 2, userId, btn => processNsEp(btn, epIdx + 1));
                 return;
             }
@@ -751,7 +753,7 @@ async function showNsDetail(interaction, shortPlayId, userId) {
                 if (hasNext) await attachNextEpBtn(target, epIdx + 2, userId, btn => processNsEp(btn, epIdx + 1));
             } catch (err) {
                 if (err.streamFallback && err.streamUrl) {
-                    await sendStreamLink(target, err.streamUrl, title, epNum, 'netshort');
+                    await sendStreamLink(target, err.streamUrl, title, epNum, 'netshort', [], nsOpts);
                     if (hasNext) await attachNextEpBtn(target, epIdx + 2, userId, btn => processNsEp(btn, epIdx + 1));
                     return;
                 }
@@ -761,7 +763,7 @@ async function showNsDetail(interaction, shortPlayId, userId) {
 
         const msg = await interaction.fetchReply();
         let page = 0;
-        const col = msg.createMessageComponentCollector({ time: 300_000 });
+        const col = msg.createMessageComponentCollector({ time: 600_000 });
         col.on('collect', async c => {
             try {
                 if (c.user.id !== userId) return c.reply({ content: '⛔ Hanya kamu yang bisa memilih.', flags: 64 });
@@ -805,7 +807,7 @@ async function showList(interaction, items, listTitle, userId, useFollowUp = fal
         msg = await interaction.fetchReply();
     }
 
-    const col = msg.createMessageComponentCollector({ time: 180_000 });
+    const col = msg.createMessageComponentCollector({ time: 600_000 });
     col.on('collect', async btn => {
         try {
             if (btn.user.id !== userId) return btn.reply({ content: '⛔ Hanya pengguna yang menjalankan perintah ini yang bisa navigasi.', flags: 64 });
@@ -873,7 +875,7 @@ module.exports = {
         const sub = interaction.options.getSubcommand();
         const userId = interaction.user.id;
 
-        await interaction.deferReply();
+        await interaction.deferReply({ flags: 64 });
 
         try {
             if (sub === 'cari') {
@@ -961,6 +963,15 @@ module.exports = {
                 const total = sortedDracin.length + sortedMovie.length;
 
                 if (total === 0) {
+                    // Bedakan: semua API gagal (server down) vs benar-benar tidak ada hasil
+                    const apiGagal = [rsRes, mlRes, nsRes, mbRes, frRes]
+                        .filter(r => r.status === 'rejected' || r.value === null).length;
+                    const semuaGagal = apiGagal >= 4; // 4 dari 5 platform gagal = server down
+                    if (semuaGagal) {
+                        return interaction.editReply({
+                            content: `⚠️ Server platform sedang gangguan sementara, coba lagi beberapa menit lagi.\n*(${apiGagal}/5 platform tidak merespons)*`
+                        });
+                    }
                     return interaction.editReply({ content: `❌ Tidak ada hasil untuk **${judul}**.` });
                 }
 
@@ -981,11 +992,13 @@ module.exports = {
                     components: [catRow]
                 });
                 const catMsg = await interaction.fetchReply();
-                const catCol = catMsg.createMessageComponentCollector({ time: 120_000 });
+                const catCol = catMsg.createMessageComponentCollector({ time: 600_000 });
                 catCol.on('collect', async btn => {
                     try {
                         if (btn.user.id !== userId) return btn.reply({ content: '⛔ Bukan giliran kamu.', flags: 64 });
                         await btn.deferUpdate();
+                        // Hentikan catCol DULU sebelum showList — hindari 2 collector aktif di pesan yang sama
+                        catCol.stop('selected');
                         if (btn.customId.endsWith('_dracin'))
                             await showList(interaction, sortedDracin, `🀄 Dracin · "${judul}"`, userId);
                         else if (btn.customId.endsWith('_movie'))
@@ -996,6 +1009,7 @@ module.exports = {
                     }
                 });
                 catCol.on('end', (_, reason) => {
+                    // Hanya hapus komponen kalau timeout (bukan setelah user pilih kategori)
                     if (reason === 'time') interaction.editReply({ components: [] }).catch(() => {});
                 });
                 return;
