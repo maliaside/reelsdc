@@ -140,6 +140,42 @@ if (plat === 'moviebox') {
     }, { once: true });
   }
 
+// ── NetShort — resolve fresh URL saat play (playVoucher expire cepat) ────────
+} else if (plat === 'netshort') {
+  const shortPlayId = P.get('shortPlayId');
+  const episodeNo   = P.get('episodeNo');
+  if (!shortPlayId || !episodeNo) { setError('Parameter tidak lengkap.'); }
+  else {
+    // Langsung aktifkan tombol — URL di-fetch SAAT play ditekan agar selalu fresh
+    markReady('Tap ▶ untuk tonton · NetShort', false);
+
+    btn.addEventListener('click', () => {
+      btn.disabled = true;
+      hint.className = 'loading';
+      hint.textContent = 'Mengambil link…';
+
+      fetch('/resolve/ns?shortPlayId=' + encodeURIComponent(shortPlayId) + '&episodeNo=' + encodeURIComponent(episodeNo) + '&_t=' + Date.now())
+        .then(r => r.json())
+        .then(d => {
+          if (d.error) { setError('❌ ' + d.error); return; }
+          hideOverlay();
+          badge.textContent = 'NetShort · memuat…';
+          vid.preload = 'none';
+          vid.src = d.url;
+          vid.load();
+          const p = vid.play();
+          if (p) p.catch(() => { vid.load(); vid.play().catch(() => {}); });
+          vid.addEventListener('canplay', () => { badge.textContent = 'NetShort'; }, { once: true });
+          vid.addEventListener('error', () => {
+            const codes = { 1:'aborted', 2:'network', 3:'decode', 4:'format' };
+            const c = vid.error ? (codes[vid.error.code] || vid.error.code) : '?';
+            setError(`Gagal putar video (${c}). Coba refresh halaman.`);
+          });
+        })
+        .catch(() => setError('Gagal ambil link. Coba refresh halaman.'));
+    }, { once: true });
+  }
+
 // ── HLS / direct MP4 (FreeReels, ReelShort, Melolo) ─────────────────────────
 } else if (!srcRaw) {
   setError('URL video tidak tersedia.');
@@ -199,18 +235,25 @@ if (plat === 'moviebox') {
     s.onerror = () => setError('Gagal load player. Refresh halaman.');
     document.head.appendChild(s);
   } else {
-    vid.preload = 'auto';
-    vid.src = src;
-    vid.addEventListener('canplay', () => markReady(`Tap ▶ untuk tonton · ${platLabel}`, false), { once: true });
-    vid.addEventListener('loadedmetadata', () => {
-      if (!vid.readyState || vid.readyState < 3) markReady(`Tap ▶ untuk tonton · ${platLabel}`, false);
-    }, { once: true });
+    // Jangan preload — langsung aktifkan tombol play, video baru load saat diklik
+    vid.preload = 'none';
+    markReady(`Tap ▶ untuk tonton · ${platLabel}`, false);
+
     btn.addEventListener('click', () => {
       hideOverlay();
+      badge.textContent = `${platLabel}${P.get('quality') ? ' · '+P.get('quality')+'p' : ''} · memuat…`;
+      vid.src = src;
+      vid.load();
       const p = vid.play();
-      if (p) p.catch(()=>{ vid.load(); vid.play().catch(()=>{}); });
-      badge.textContent = `${platLabel}${P.get('quality') ? ' · '+P.get('quality')+'p' : ''}`;
-      vid.addEventListener('error', () => setError('Gagal memuat video. Coba refresh.'));
+      if (p) p.catch(() => { vid.load(); vid.play().catch(() => {}); });
+      vid.addEventListener('canplay', () => {
+        badge.textContent = `${platLabel}${P.get('quality') ? ' · '+P.get('quality')+'p' : ''}`;
+      }, { once: true });
+      vid.addEventListener('error', () => {
+        const codes = { 1:'aborted', 2:'network', 3:'decode', 4:'format' };
+        const c = vid.error ? (codes[vid.error.code] || vid.error.code) : '?';
+        setError(`Gagal memuat video (${c}). Coba refresh halaman.`);
+      });
     }, { once: true });
   }
 }
