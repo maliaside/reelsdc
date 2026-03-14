@@ -26,17 +26,22 @@ const MB_HEADERS = {
 };
 
 function getBaseUrl() {
+    // Prioritas 1: Override manual (untuk kasus khusus)
     if (process.env.BOT_BASE_URL) return process.env.BOT_BASE_URL;
-    if (process.env.REPLIT_DEV_DOMAIN) return `https://${process.env.REPLIT_DEV_DOMAIN}`;
-    // In production VM deployment, REPLIT_DOMAINS contains the live domain
+    // Prioritas 2: REPLIT_DOMAINS — berisi URL yang benar baik di dev maupun production
+    // Di production: URL deployment (misal iuxf2.picard.replit.dev)
+    // Di dev: URL dev container (sama dengan REPLIT_DEV_DOMAIN)
     if (process.env.REPLIT_DOMAINS) {
         const domain = process.env.REPLIT_DOMAINS.split(',')[0].trim();
         if (domain) return `https://${domain}`;
     }
+    // Fallback ke dev domain kalau REPLIT_DOMAINS tidak ada
+    if (process.env.REPLIT_DEV_DOMAIN) return `https://${process.env.REPLIT_DEV_DOMAIN}`;
     return `http://localhost:${PORT}`;
 }
 
 app.get('/player', (req, res) => {
+    res.set('Cache-Control', 'no-store, no-cache, must-revalidate');
     res.sendFile(path.join(__dirname, 'player.html'));
 });
 
@@ -194,6 +199,28 @@ app.get('/proxy/mp4', async (req, res) => {
     }
 });
 
+// NetShort — resolve fresh playVoucher saat play ditekan (URL signed & expire cepat)
+const nsApi = require('./api/netshort');
+
+app.get('/resolve/ns', async (req, res) => {
+    const { shortPlayId, episodeNo } = req.query;
+    if (!shortPlayId || !episodeNo) return res.status(400).json({ error: 'Missing shortPlayId or episodeNo' });
+    try {
+        const raw = await nsApi.getAllEpisodes(shortPlayId);
+        const detail = nsApi.parseAllEpisodes(raw);
+        if (!detail) return res.status(404).json({ error: 'Drama tidak ditemukan' });
+        const ep = detail.episodes.find(e => String(e.episodeNo) === String(episodeNo));
+        if (!ep || !ep.playVoucher) return res.status(404).json({ error: `Episode ${episodeNo} tidak ditemukan` });
+        // Berikan URL CDN langsung ke browser — IP mobile user tidak diblokir CDN
+        // (CDN memblokir datacenter IP seperti Replit, tapi bukan IP residensial/mobile)
+        res.set('Access-Control-Allow-Origin', '*');
+        res.json({ url: ep.playVoucher });
+    } catch (err) {
+        console.error('[resolve/ns]', err.message);
+        res.status(502).json({ error: err.message });
+    }
+});
+
 // MovieBox — resolve fresh CDN URL server-side, browser streams directly
 // The CDN blocks datacenter IPs; user's browser can access it directly
 const mbApi = require('./api/moviebox');
@@ -268,6 +295,7 @@ app.get('/api/bot/status', (req, res) => {
 function startWebServer() {
     app.listen(PORT, '0.0.0.0', () => {
         console.log(`Web player berjalan di port ${PORT}`);
+        console.log(`Base URL player: ${getBaseUrl()}`);
     });
     // Port 3000 required for Replit deployment health check (first localPort in .replit)
     if (PORT !== 3000) {
@@ -297,11 +325,16 @@ function getMeloloPlayerUrl(mp4url, title, ep) {
     return `${base}/player?${params.toString()}`;
 }
 
-function getNsPlayerUrl(mp4url, title, ep) {
+function getNsPlayerUrl(shortPlayId, episodeNo, title, ep) {
     const base = getBaseUrl();
-    // Proxy melalui server untuk atasi CORS + SSL issue pada CDN NetShort
-    const proxied = `${base}/proxy/mp4?url=${encodeURIComponent(mp4url)}`;
-    const params = new URLSearchParams({ url: proxied, title: title || '', ep: String(ep || ''), platform: 'netshort' });
+    // Tidak embed URL langsung — resolve fresh saat play (URL signed & expire cepat)
+    const params = new URLSearchParams({
+        platform: 'netshort',
+        shortPlayId: shortPlayId || '',
+        episodeNo: String(episodeNo || ''),
+        title: title || '',
+        ep: String(ep || ''),
+    });
     return `${base}/player?${params.toString()}`;
 }
 
