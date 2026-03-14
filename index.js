@@ -15,11 +15,25 @@ process.on('uncaughtException', (err) => {
 process.on('exit', code => {
     console.error('[EXIT] Process exiting with code', code);
 });
-process.on('SIGTERM', () => {
-    console.error('[SIGTERM] Received SIGTERM — restarting...');
-    // Let Replit restart us
-    process.exit(0);
-});
+// JANGAN handle SIGTERM — biarkan Node.js default exit code 143
+// supaya Replit tahu harus auto-restart (exit 0 dianggap intentional stop)
+
+// Reconnect Discord client jika koneksi terputus
+function startBot() {
+    client.login(process.env.DISCORD_BOT_TOKEN).catch(err => {
+        console.error('[login] Gagal login:', err.message, '— retry 15s...');
+        setTimeout(startBot, 15_000);
+    });
+}
+
+// Reconnect jika Discord disconnect
+function attachReconnect(c) {
+    c.on('error', err => console.error('[Discord error]', err.message));
+    c.on('shardDisconnect', (_, id) => {
+        console.warn(`[shard ${id}] Disconnect — Discord.js akan auto-reconnect`);
+    });
+    c.on('shardError', err => console.error('[shardError]', err.message));
+}
 
 // Keep event loop alive 24/7
 process.stdin.resume();
@@ -55,5 +69,6 @@ client.on('interactionCreate', async interaction => {
     }
 });
 
+attachReconnect(client);
 startWebServer();
-client.login(process.env.DISCORD_BOT_TOKEN);
+startBot();
